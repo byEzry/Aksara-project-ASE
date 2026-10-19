@@ -6,22 +6,62 @@ import { createClient } from '@supabase/supabase-js';
 import multer from 'multer';
 import sharp from 'sharp';
 import cors from 'cors';
-import authMiddleware from './middleware/authMiddleware.js';
+import authMiddleware from './middleware/authmiddleware.js';
 import roleMiddleware from './middleware/roleMiddleware.js';
+import swaggerUi from 'swagger-ui-express';
+import swaggerSpec from './docs/swagger.js';
 const app = express();
 const PORT = 3000;
-
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 // agar server bisa membaca data berformat JSON dari client
 app.use(express.json())
 app.use(cors());
 
 // (Endpoint GET )
+
+/**
+ * @swagger
+ * /:
+ *   get:
+ *     summary: Memeriksa endpoint utama server
+ *     description: Mengembalikan pesan awal dari backend.
+ *     tags:
+ *       - General
+ *     responses:
+ *       200:
+ *         description: Server merespons permintaan
+ */
+
 app.get('/', (req, res) => {
     res.send('Halo! Back-end Telkom Share sudah aktif!');
 
 });
 
-const upload = multer({ storage: multer.memoryStorage()});
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024 // Maksimal 10 MB
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'image/jpeg',
+      'image/png',
+      'image/webp'
+    ];
+
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Format file tidak diizinkan.'));
+    }
+  }
+});
 
 // mengambil fungsi createClient (paten yaa) dari supabasenya ini menjembatani antara express dengan supabase
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -36,6 +76,44 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseSecretKey, {
     persistSession: false
   }
 });
+
+
+/**
+ * @swagger
+ * /register:
+ *   post:
+ *     summary: Registrasi pengguna
+ *     description: Mendaftarkan pengguna melalui Supabase Auth dan menyimpan data pengguna dengan role mahasiswa.
+ *     tags:
+ *       - Authentication
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: mahasiswa@example.com
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 example: password123
+ *     responses:
+ *       201:
+ *         description: Registrasi berhasil
+ *       400:
+ *         description: Registrasi gagal
+ *       500:
+ *         description: Terjadi kesalahan saat menyimpan data pengguna atau pada server
+ */
+
+
 app.post('/register', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -84,6 +162,43 @@ app.post('/register', async (req, res) => {
   }
 });
 
+
+/**
+ * @swagger
+ * /login:
+ *   post:
+ *     summary: Login pengguna
+ *     description: Memverifikasi email dan password pengguna melalui Supabase Auth.
+ *     tags:
+ *       - Authentication
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: mahasiswa@example.com
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 example: password123
+ *     responses:
+ *       200:
+ *         description: Login berhasil
+ *       401:
+ *         description: Email atau password gagal diverifikasi
+ *       500:
+ *         description: Terjadi kesalahan pada server
+ */
+
+
 app.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -112,148 +227,53 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// 1. Endpoint POST : untuk menyimpan hal baru, ibaratnya menginput data lalu save
-app.post('/upload-materi', upload.single('file'), async (req, res) => {
-    try {
-        // 1. Cek apakah file ada
-        if (!req.file) {
-            return res.status(400).json({ error: "File tidak ditemukan!" });
-        }
 
-        let fileBuffer = req.file.buffer;
-        const originalName = req.file.originalname;
-        const contentType = req.file.mimetype;
-        
-        // Buat nama file unik
-        let fileName = `${Date.now()}-${originalName.replace(/\s+/g, '_')}`;
+/**
+ * @swagger
+ * /admin/report:
+ *   get:
+ *     summary: Mengambil daftar laporan
+ *     description: Mengambil seluruh data laporan. Hanya pengguna dengan role admin yang dapat mengakses endpoint ini.
+ *     tags:
+ *       - Admin - Report
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Data report berhasil diambil
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Data report berhasil diambil!
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       report_id:
+ *                         type: string
+ *                       alasan:
+ *                         type: string
+ *                       user_id:
+ *                         type: string
+ *                       resource_id:
+ *                         type: string
+ *                         nullable: true
+ *                       experience_id:
+ *                         type: string
+ *                         nullable: true
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Pengguna tidak memiliki role admin
+ *       500:
+ *         description: Gagal mengambil data report
+ */
 
-        // 2. Cek apakah file berupa gambar (MIME-type berawalan 'image/')
-        if (contentType && contentType.startsWith('image/')) {
-            try {
-                // Kompres gambar dengan sharp secara aman
-                fileBuffer = await sharp(req.file.buffer)
-                    .resize({ width: 1200, withoutEnlargement: true }) // Batasi lebar max 1200px
-                    .jpeg({ quality: 80, mozjpeg: true })             // Atur kualitas 80%
-                    .toBuffer();
-                
-                console.log("Gambar berhasil dikompres!");
-            } catch (sharpErr) {
-                console.log("Gagal kompres, pakai file asli:", sharpErr.message);
-                fileBuffer = req.file.buffer; // Fallback jika kompresi gagal
-            }
-        } else {
-            console.log(`File non-gambar (${contentType}), dilewatkan tanpa kompresi.`);
-        }
-
-        // 3. Upload file ke Supabase Storage (bucket: materi-files)
-        const { data: storageData, error: storageError } = await supabase.storage
-            .from('materi-files')
-            .upload(`uploads/${fileName}`, fileBuffer, {
-                contentType: contentType,
-                upsert: false
-            });
-
-        if (storageError) throw storageError;
-
-        // 4. Ambil Public URL
-        const { data: publicUrlData } = supabase.storage
-            .from('materi-files')
-            .getPublicUrl(`uploads/${fileName}`);
-
-        const file_url = publicUrlData.publicUrl;
-
-        // 5. Simpan metadata ke Database PostgreSQL (tabel: materi)
-        const { title, course, description } = req.body;
-        const { data: dbData, error: dbError } = await supabase
-            .from('materi')
-            .insert([{ title, course, description, file_url }])
-            .select();
-
-        if (dbError) throw dbError;
-
-        // 6. Respon Berhasil
-        res.status(201).json({
-            message: "File berhasil di-upload dan data tersimpan!",
-            file_url,
-            data: dbData
-        });
-
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: err.message });
-    }
-});
-//2. Endpoint GET
-app.get('/materi', async (req,res)=> {
-    try {
-        // Mengambil semua data dari tabel materi dan mengurutkannya dari yang terbaru
-        const {data, error} = await supabase
-            .from('materi')
-            .select('*')
-            .order('created_at', {ascending : false});
-
-        if (error) throw error;
-        // Mengirimkan data materi ke client dalam bentuk JSON
-        res.status(200).json(data);
-
-    } catch (err) {
-        res.status(500).json({error: err.message});
-    }
-});
-
-app.get('/test-auth', authMiddleware, (req, res) => {
-  res.status(200).json({
-    message: 'Auth berhasil!',
-    user: req.user
-  });
-});
-
-app.put(
-  '/admin/resource/:id/status',
-  authMiddleware,
-  roleMiddleware('admin'),
-  async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { status } = req.body;
-
-      if (!status) {
-        return res.status(400).json({
-          error: 'Status wajib diisi'
-        });
-      }
-
-      const statusAllowed = ['approved', 'rejected'];
-
-      if (!statusAllowed.includes(status)) {
-        return res.status(400).json({
-          error: 'Status harus approved atau rejected'
-        });
-      }
-
-      const { data, error } = await supabaseAdmin
-        .from('resource')
-        .update({ status })
-        .eq('resource_id', id)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      res.status(200).json({
-        message: 'Status resource berhasil diperbarui!',
-        data
-      });
-
-    } catch (err) {
-      console.error(err);
-
-      res.status(500).json({
-        error: 'Gagal memperbarui status resource'
-      });
-    }
-  }
-);
 
 app.get(
   '/admin/report',
@@ -288,6 +308,178 @@ app.get(
   }
 );
 
+
+/**
+ * @swagger
+ * /admin/report/{id}:
+ *   get:
+ *     summary: Mengambil detail laporan
+ *     description: Mengambil detail laporan beserta resource atau experience yang dilaporkan. Hanya admin yang dapat mengakses endpoint ini.
+ *     tags:
+ *       - Admin - Report
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: ID laporan yang ingin dilihat
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Detail laporan berhasil diambil
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Detail laporan berhasil diambil!
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     report_id:
+ *                       type: string
+ *                     alasan:
+ *                       type: string
+ *                     user_id:
+ *                       type: string
+ *                     resource_id:
+ *                       type: string
+ *                       nullable: true
+ *                     experience_id:
+ *                       type: string
+ *                       nullable: true
+ *                     konten_dilaporkan:
+ *                       type: object
+ *                       nullable: true
+ *                       description: Data resource atau experience yang dilaporkan
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Pengguna tidak memiliki role admin
+ *       404:
+ *         description: Laporan tidak ditemukan
+ *       500:
+ *         description: Gagal mengambil detail laporan
+ */
+
+app.get(
+  '/admin/report/:id',
+  authMiddleware,
+  roleMiddleware('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const { data: report, error } = await supabaseAdmin
+        .from('report')
+        .select(`
+          report_id,
+          alasan,
+          user_id,
+          resource_id,
+          experience_id
+        `)
+        .eq('report_id', id)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!report) {
+        return res.status(404).json({
+          error: 'Laporan tidak ditemukan'
+        });
+      }
+
+      let kontenDilaporkan = null;
+
+      if (report.resource_id) {
+        const { data, error } = await supabaseAdmin
+          .from('resource')
+          .select('resource_id, judul, deskripsi, sumber, status')
+          .eq('resource_id', report.resource_id)
+          .maybeSingle();
+
+        if (error) throw error;
+        kontenDilaporkan = data;
+      } else if (report.experience_id) {
+        const { data, error } = await supabaseAdmin
+          .from('experience')
+          .select('experience_id, judul, konten, status')
+          .eq('experience_id', report.experience_id)
+          .maybeSingle();
+
+        if (error) throw error;
+        kontenDilaporkan = data;
+      }
+
+      return res.status(200).json({
+        message: 'Detail laporan berhasil diambil!',
+        data: {
+          ...report,
+          konten_dilaporkan: kontenDilaporkan
+        }
+      });
+
+    } catch (err) {
+      console.error('Gagal mengambil detail laporan:', err);
+
+      return res.status(500).json({
+        error: 'Gagal mengambil detail laporan'
+      });
+    }
+  }
+);
+
+
+/**
+ * @swagger
+ * /admin/experience:
+ *   get:
+ *     summary: Mengambil daftar experience
+ *     description: Mengambil daftar experience beserta judul, konten, status, dan pemiliknya. Hanya admin yang dapat mengakses endpoint ini.
+ *     tags:
+ *       - Admin - Experience
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Data experience berhasil diambil
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Data experience berhasil diambil!
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       experience_id:
+ *                         type: string
+ *                       judul:
+ *                         type: string
+ *                       konten:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *                       user_id:
+ *                         type: string
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Pengguna tidak memiliki role admin
+ *       500:
+ *         description: Gagal mengambil data experience
+ */
+
 app.get(
   '/admin/experience',
   authMiddleware,
@@ -320,6 +512,54 @@ app.get(
     }
   }
 );
+
+
+/**
+ * @swagger
+ * /admin/experience/{id}/status:
+ *   put:
+ *     summary: Memperbarui status experience
+ *     description: Mengubah status experience menjadi approved atau rejected. Hanya admin yang dapat mengakses endpoint ini.
+ *     tags:
+ *       - Admin - Experience
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: ID experience yang statusnya akan diubah
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum:
+ *                   - approved
+ *                   - rejected
+ *                 example: approved
+ *     responses:
+ *       200:
+ *         description: Status experience berhasil diperbarui
+ *       400:
+ *         description: Status wajib diisi atau nilainya tidak valid
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Pengguna tidak memiliki role admin
+ *       500:
+ *         description: Gagal memperbarui status experience
+ */
+
 
 app.put(
   '/admin/experience/:id/status',
@@ -368,133 +608,121 @@ app.put(
   }
 );
 
-app.listen(PORT, () => {
-  console.log(`Server berjalan di http://localhost:${PORT}`);
-});
 
-// 1. UPDATE MATERI BERDASARKAN ID
-app.put('/materi/:id', upload.single('file'), async (req, res) => {
+/**
+ * @swagger
+ * /admin/resource/{id}/status:
+ *   put:
+ *     summary: Memperbarui status resource
+ *     description: Mengubah status resource menjadi approved atau rejected. Hanya admin yang dapat mengakses endpoint ini.
+ *     tags:
+ *       - Admin - Resource
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: ID resource yang statusnya akan diubah
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum:
+ *                   - approved
+ *                   - rejected
+ *                 example: approved
+ *     responses:
+ *       200:
+ *         description: Status resource berhasil diperbarui
+ *       400:
+ *         description: Status wajib diisi atau nilainya tidak valid
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Pengguna tidak memiliki role admin
+ *       500:
+ *         description: Gagal memperbarui status resource
+ */
+
+
+/* ADMIN - UPDATE STATUS RESOURCE */
+app.put(
+  '/admin/resource/:id/status',
+  authMiddleware,
+  roleMiddleware('admin'),
+  async (req, res) => {
     try {
-        const { id } = req.params;
-        const { title, course, description } = req.body;
+      const { id } = req.params;
+      const { status } = req.body;
 
-        // Ambil data lama di database untuk cek apakah ada file lama
-        const { data: existingData, error: fetchError } = await supabase
-            .from('materi')
-            .select('*')
-            .eq('id', id)
-            .single();
-
-        if (fetchError || !existingData) {
-            return res.status(404).json({ error: "Materi tidak ditemukan!" });
-        }
-
-        let file_url = existingData.file_url; // Default pakai file lama
-
-        // Jika user mengupload file baru saat update
-        if (req.file) {
-            let fileBuffer = req.file.buffer;
-            const originalName = req.file.originalname;
-            const contentType = req.file.mimetype;
-            let fileName = `${Date.now()}-${originalName.replace(/\s+/g, '_')}`;
-
-            // Kompres jika gambar
-            if (contentType && contentType.startsWith('image/')) {
-                try {
-                    fileBuffer = await sharp(req.file.buffer)
-                        .resize({ width: 1200, withoutEnlargement: true })
-                        .jpeg({ quality: 80, mozjpeg: true })
-                        .toBuffer();
-                } catch (err) {
-                    console.log("Gagal kompres saat update, pakai file asli.");
-                }
-            }
-
-            // Upload file baru ke Supabase Storage
-            const { error: storageError } = await supabase.storage
-                .from('materi-files')
-                .upload(`uploads/${fileName}`, fileBuffer, { contentType });
-
-            if (storageError) throw storageError;
-
-            // Dapatkan URL publik file baru
-            const { data: publicUrlData } = supabase.storage
-                .from('materi-files')
-                .getPublicUrl(`uploads/${fileName}`);
-
-            file_url = publicUrlData.publicUrl;
-        }
-
-        // Update data di PostgreSQL
-        const { data: updatedData, error: updateError } = await supabase
-            .from('materi')
-            .update({
-                title: title || existingData.title,
-                course: course || existingData.course,
-                description: description || existingData.description,
-                file_url: file_url
-            })
-            .eq('id', id)
-            .select();
-
-        if (updateError) throw updateError;
-
-        res.status(200).json({
-            message: "Materi berhasil diperbarui!",
-            data: updatedData
+      if (!status) {
+        return res.status(400).json({
+          error: 'Status wajib diisi'
         });
+      }
+
+      const statusAllowed = ['approved', 'rejected'];
+
+      if (!statusAllowed.includes(status)) {
+        return res.status(400).json({
+          error: 'Status harus approved atau rejected'
+        });
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('resource')
+        .update({ status })
+        .eq('resource_id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      res.status(200).json({
+        message: 'Status resource berhasil diperbarui!',
+        data
+      });
 
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: err.message });
+      console.error(err);
+
+      res.status(500).json({
+        error: 'Gagal memperbarui status resource'
+      });
     }
-});
+  }
+);
 
-// 2. DELETE MATERI BERDASARKAN ID
-app.delete('/materi/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
 
-        // Ambil data materi dulu untuk mendapatkan URL file fisiknya
-        const { data: materiData, error: fetchError } = await supabase
-            .from('materi')
-            .select('*')
-            .eq('id', id)
-            .single();
-
-        if (fetchError || !materiData) {
-            return res.status(404).json({ error: "Materi tidak ditemukan!" });
-        }
-
-        // Hapus record dari database PostgreSQL
-        const { error: deleteDbError } = await supabase
-            .from('materi')
-            .delete()
-            .eq('id', id);
-
-        if (deleteDbError) throw deleteDbError;
-
-        // Ekstraksi nama file dari URL untuk dihapus dari Storage (Opsional)
-        if (materiData.file_url) {
-            const urlParts = materiData.file_url.split('/materi-files/');
-            if (urlParts.length > 1) {
-                const filePath = urlParts[1]; // contoh: uploads/1788...docx
-                await supabase.storage
-                    .from('materi-files')
-                    .remove([filePath]);
-            }
-        }
-
-        res.status(200).json({
-            message: `Materi dengan ID ${id} berhasil dihapus beserta file fisiknya!`
-        });
-
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
+/**
+ * @swagger
+ * /test-mahasiswa:
+ *   get:
+ *     summary: Menguji autentikasi dan akses mahasiswa
+ *     description: Endpoint pengujian middleware autentikasi dan role mahasiswa.
+ *     tags:
+ *       - Testing
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Autentikasi dan role mahasiswa valid
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Pengguna bukan mahasiswa
+ */
 
 
 app.get(
@@ -509,6 +737,86 @@ app.get(
   }
 );
 
+/**
+ * @swagger
+ * /resource:
+ *   post:
+ *     summary: Upload resource pembelajaran
+ *     description: >
+ *       Mahasiswa mengunggah resource pembelajaran.
+ *       Resource yang berhasil diunggah akan memiliki status pending
+ *       dan menunggu moderasi admin. File maksimal 10 MB.
+ *     tags:
+ *       - Resource
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - judul
+ *               - deskripsi
+ *               - sumber
+ *               - file
+ *             properties:
+ *               judul:
+ *                 type: string
+ *                 description: Judul resource pembelajaran
+ *                 example: Materi Sistem Operasi
+ *               deskripsi:
+ *                 type: string
+ *                 description: Deskripsi resource pembelajaran
+ *                 example: Materi pengantar sistem operasi
+ *               sumber:
+ *                 type: string
+ *                 description: Sumber resource
+ *                 example: Dosen Sistem Operasi
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: >
+ *                   File PDF, DOC, DOCX, PPT, PPTX, JPEG, PNG,
+ *                   atau WEBP dengan ukuran maksimal 10 MB.
+ *               category_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID kategori (opsional)
+ *               matkul_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID mata kuliah (opsional)
+ *               semester_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID semester (opsional)
+ *               prodi_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID program studi (opsional)
+ *               fakultas_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID fakultas (opsional)
+ *     responses:
+ *       201:
+ *         description: Resource berhasil diunggah dengan status pending
+ *       400:
+ *         description: >
+ *           Input wajib belum lengkap, file tidak valid,
+ *           atau referensi data tidak valid.
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Pengguna tidak memiliki hak akses mahasiswa
+ *       413:
+ *         description: Ukuran file melebihi batas maksimal 10 MB
+ *       500:
+ *         description: Terjadi kesalahan pada server
+ */
+
 // POST RESOURCE
 app.post(
   '/resource',
@@ -521,6 +829,8 @@ app.post(
         judul,
         deskripsi,
         sumber,
+        category_id,
+        matkul_id,
         semester_id,
         prodi_id,
         fakultas_id
@@ -546,32 +856,45 @@ app.post(
       // 4. Siapkan file
       let fileBuffer = req.file.buffer;
       const originalName = req.file.originalname;
-      const contentType = req.file.mimetype;
+      let contentType = req.file.mimetype;
 
-      const fileName = `${Date.now()}-${originalName.replace(/\s+/g, '_')}`;
+      let fileName = `${Date.now()}-${originalName.replace(/\s+/g, '_')}`;
 
       // 5. Kalau gambar, kompres
-      if (contentType && contentType.startsWith('image/')) {
-        try {
-          fileBuffer = await sharp(req.file.buffer)
-            .resize({
-              width: 1200,
-              withoutEnlargement: true
-            })
-            .jpeg({
-              quality: 80,
-              mozjpeg: true
-            })
-            .toBuffer();
-        } catch (sharpErr) {
-          console.log(
-            'Gagal kompres gambar, menggunakan file asli:',
-            sharpErr.message
-          );
+      
+if (contentType && contentType.startsWith('image/')) {
+  try {
+    fileBuffer = await sharp(req.file.buffer)
+      .rotate()
+      .resize({
+        width: 1200,
+        withoutEnlargement: true
+      })
+      .jpeg({
+        quality: 80,
+        mozjpeg: true
+      })
+      .toBuffer();
 
-          fileBuffer = req.file.buffer;
-        }
-      }
+    // Hasil kompresi selalu berformat JPEG
+    contentType = 'image/jpeg';
+
+    // Ganti ekstensi file menjadi .jpg
+    const safeName = originalName
+      .replace(/\.[^/.]+$/, '')
+      .replace(/\s+/g, '_');
+
+    fileName = `${Date.now()}-${safeName}.jpg`;
+
+    console.log('Gambar berhasil dikompres menjadi JPEG.');
+  } catch (sharpErr) {
+    console.error('Gagal kompres gambar:', sharpErr.message);
+
+    return res.status(400).json({
+      error: 'Gambar tidak dapat diproses. Periksa file yang diunggah.'
+    });
+  }
+}
 
       // 6. Upload file ke Supabase Storage
       const { error: storageError } = await supabaseAdmin
@@ -587,12 +910,8 @@ app.post(
       }
 
       // 7. Ambil URL file
-      const { data: publicUrlData } = supabaseAdmin
-        .storage
-        .from('materi-files')
-        .getPublicUrl(`resource/${fileName}`);
 
-      const link_file = publicUrlData.publicUrl;
+      const link_file = `resource/${fileName}`;
 
       // 8. Simpan data resource ke database
       const { data, error: dbError } = await supabaseAdmin
@@ -605,6 +924,8 @@ app.post(
             link_file,
             status: 'pending',
             user_id,
+            category_id,
+            matkul_id: matkul_id || null,
             semester_id: semester_id || null,
             prodi_id: prodi_id || null,
             fakultas_id: fakultas_id || null
@@ -612,9 +933,24 @@ app.post(
         ])
         .select();
 
-      if (dbError) {
-        throw dbError;
-      }
+      
+if (dbError) {
+  // Hapus file jika penyimpanan data resource gagal
+  const { error: deleteError } = await supabaseAdmin
+    .storage
+    .from('materi-files')
+    .remove([`resource/${fileName}`]);
+
+  if (deleteError) {
+    console.error(
+      'Gagal menghapus file dari Storage:',
+      deleteError.message
+    );
+  }
+
+  throw dbError;
+}
+
 
       // 9. Response
       res.status(201).json({
@@ -622,19 +958,180 @@ app.post(
         data
       });
 
-    } catch (err) {
-      console.error(err);
+    
+} catch (err) {
+  console.error('Gagal membuat resource:', err.message);
 
-      res.status(500).json({
-        error: err.message
-      });
-    }
+  // Error foreign key: ID kategori, matkul, dan lainnya tidak valid
+  if (err.code === '23503') {
+    return res.status(400).json({
+      error: 'Kategori, mata kuliah, semester, program studi, fakultas, atau pengguna tidak valid.'
+    });
+  }
+
+  return res.status(500).json({
+    error: 'Terjadi kesalahan saat mengunggah resource.'
+  });
+}
+
   }
 );
 
+
+/**
+ * @swagger
+ * /kategori:
+ *   get:
+ *     summary: Mengambil semua kategori
+ *     description: Mengambil daftar kategori dan mengurutkannya berdasarkan nama kategori secara menaik.
+ *     tags:
+ *       - Kategori
+ *     responses:
+ *       200:
+ *         description: Data kategori berhasil diambil
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Data kategori berhasil diambil!
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       category_id:
+ *                         type: string
+ *                         format: uuid
+ *                       nama_kategori:
+ *                         type: string
+ *       500:
+ *         description: Terjadi kesalahan saat mengambil data kategori
+ */
+
+
+ // GET SEMUA KATEGORI
+app.get('/kategori', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('kategori')
+      .select('category_id, nama_kategori')
+      .order('nama_kategori', { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    res.status(200).json({
+      message: 'Data kategori berhasil diambil!',
+      data
+    });
+
+  } catch (err) {
+    console.error('Gagal mengambil data kategori:', err.message);
+
+    res.status(500).json({
+      error: 'Terjadi kesalahan saat mengambil data kategori.'
+    });
+  }
+});
+
+
+/**
+ * @swagger
+ * /mata-kuliah:
+ *   get:
+ *     summary: Mengambil semua mata kuliah
+ *     description: Mengambil daftar mata kuliah dan mengurutkannya berdasarkan nama mata kuliah secara menaik.
+ *     tags:
+ *       - Mata Kuliah
+ *     responses:
+ *       200:
+ *         description: Data mata kuliah berhasil diambil
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Data mata kuliah berhasil diambil!
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       matkul_id:
+ *                         type: string
+ *                         format: uuid
+ *                       nama_matkul:
+ *                         type: string
+ *                       kode_matkul:
+ *                         type: string
+ *                       sks:
+ *                         type: integer
+ *                       prodi_id:
+ *                         type: string
+ *                         format: uuid
+ *                       semester_id:
+ *                         type: string
+ *                         format: uuid
+ *       500:
+ *         description: Terjadi kesalahan saat mengambil data mata kuliah
+ */
+
+
+// GET SEMUA MATA KULIAH
+app.get('/mata-kuliah', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('mata_kuliah')
+      .select('matkul_id, nama_matkul, kode_matkul, sks, prodi_id, semester_id')
+      .order('nama_matkul', { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    res.status(200).json({
+      message: 'Data mata kuliah berhasil diambil!',
+      data
+    });
+
+  } catch (err) {
+    console.error('Gagal mengambil data mata kuliah:', err.message);
+
+    res.status(500).json({
+      error: 'Terjadi kesalahan saat mengambil data mata kuliah.'
+    });
+  }
+});
+
+
+/**
+ * @swagger
+ * /resource:
+ *   get:
+ *     summary: Mendapatkan daftar resource yang disetujui
+ *     description: Mengambil daftar resource berstatus approved. Field link_file tidak disertakan dalam respons.
+ *     tags:
+ *       - Resource
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Daftar resource berhasil diambil
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       500:
+ *         description: Terjadi kesalahan pada server
+ */
+
+
 // GET SEMUA RESOURCE
-// GET SEMUA RESOURCE
-app.get('/resource', async (req, res) => {
+app.get('/resource',  authMiddleware, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('resource')
@@ -643,13 +1140,19 @@ app.get('/resource', async (req, res) => {
         judul,
         deskripsi,
         sumber,
-        link_file,
         status,
         user_id,
+        category_id,
+        matkul_id,
+        kategori (
+            category_id,
+            nama_kategori
+        ),
         semester_id,
         prodi_id,
         fakultas_id
-      `);
+      `)
+      .eq('status', 'approved');
 
     if (error) {
       throw error;
@@ -664,17 +1167,437 @@ app.get('/resource', async (req, res) => {
     console.error(err);
 
     res.status(500).json({
-      error: err.message
+      error: 'Terjadi kesalahan saat mengambil data resource.'
     });
   }
 });
 
-// SEARCH RESOURCE
-app.get('/resource/search', async (req, res) => {
+
+
+/**
+ * @swagger
+ * /resource-relevan:
+ *   get:
+ *     summary: Mencari dan memfilter resource relevan
+ *     description: Endpoint publik untuk mencari resource yang disetujui, memfilter berdasarkan kategori, mata kuliah, semester, program studi, fakultas, format, tahun, dan rata-rata rating, serta mengurutkan dan melakukan pagination. Field link_file tidak disertakan.
+ *     tags:
+ *       - Resource
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         schema:
+ *           type: string
+ *         description: Kata kunci judul atau deskripsi
+ *       - in: query
+ *         name: category_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Filter berdasarkan kategori
+ *       - in: query
+ *         name: matkul_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Filter berdasarkan mata kuliah
+ *       - in: query
+ *         name: semester_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Filter berdasarkan semester
+ *       - in: query
+ *         name: prodi_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Filter berdasarkan program studi
+ *       - in: query
+ *         name: fakultas_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Filter berdasarkan fakultas
+ *       - in: query
+ *         name: format
+ *         schema:
+ *           type: string
+ *           enum: [pdf, doc, ppt, zip]
+ *         description: Filter berdasarkan format file
+ *       - in: query
+ *         name: tahun
+ *         schema:
+ *           type: integer
+ *           minimum: 2000
+ *           maximum: 2100
+ *         description: Filter berdasarkan tahun
+ *       - in: query
+ *         name: rating_min
+ *         schema:
+ *           type: number
+ *           minimum: 1
+ *           maximum: 5
+ *         description: Batas minimum rata-rata rating
+ *       - in: query
+ *         name: rating_max
+ *         schema:
+ *           type: number
+ *           minimum: 1
+ *           maximum: 5
+ *         description: Batas maksimum rata-rata rating
+ *       - in: query
+ *         name: sort
+ *         schema:
+ *           type: string
+ *           enum: [terbaru, terlama, judul_asc, judul_desc]
+ *           default: terbaru
+ *         description: Urutan berdasarkan waktu atau judul
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           default: 1
+ *         description: Nomor halaman
+ *     responses:
+ *       200:
+ *         description: Pencarian dan filter berhasil
+ *       400:
+ *         description: Parameter pencarian, filter, sorting, atau pagination tidak valid
+ *       500:
+ *         description: Terjadi kesalahan pada server
+ */
+
+
+ // GET RESOURCE RELEVAN (PUBLIK)
+app.get('/resource-relevan', async (req, res) => {
+  try {
+    const {
+      q,
+      category_id,
+      matkul_id,
+      semester_id,
+      prodi_id,
+      fakultas_id,
+      format,
+      tahun,
+      rating_min,
+      rating_max,
+      sort = 'terbaru',
+      page: pageQuery
+    } = req.query;
+
+    const page = pageQuery === undefined ? 1 : Number(pageQuery);
+    const limit = 12;
+
+    if (!Number.isInteger(page) || page < 1) {
+      return res.status(400).json({
+        error: 'Nomor halaman harus berupa bilangan bulat minimal 1.'
+      });
+    }
+
+    const sorting = {
+      terbaru: { column: 'created_at', ascending: false },
+      terlama: { column: 'created_at', ascending: true },
+      judul_asc: { column: 'judul', ascending: true },
+      judul_desc: { column: 'judul', ascending: false }
+    };
+
+    if (!sorting[sort]) {
+      return res.status(400).json({
+        error: 'Pilihan sorting tidak valid.'
+      });
+    }
+
+    // Validasi pencarian
+    if (q !== undefined &&
+        (typeof q !== 'string' || !q.trim())) {
+      return res.status(400).json({
+        error: 'Kata pencarian tidak boleh kosong.'
+      });
+    }
+
+    // Validasi format
+    const formatYangDidukung = {
+      pdf: ['pdf'],
+      doc: ['doc', 'docx'],
+      ppt: ['ppt', 'pptx'],
+      zip: ['zip']
+    };
+
+    if (format !== undefined) {
+      if (
+        typeof format !== 'string' ||
+        !formatYangDidukung[format.toLowerCase()]
+      ) {
+        return res.status(400).json({
+          error: 'Format harus pdf, doc, ppt, atau zip.'
+        });
+      }
+    }
+
+    // Validasi tahun
+    if (tahun !== undefined) {
+      if (
+        typeof tahun !== 'string' ||
+        !/^\d{4}$/.test(tahun) ||
+        Number(tahun) < 2000 ||
+        Number(tahun) > 2100
+      ) {
+        return res.status(400).json({
+          error: 'Tahun upload harus berupa tahun yang valid.'
+        });
+      }
+    }
+
+    // Validasi rentang rating
+    const minRating =
+      rating_min === undefined ? null : Number(rating_min);
+    const maxRating =
+      rating_max === undefined ? null : Number(rating_max);
+
+    if (
+      (rating_min !== undefined &&
+        (rating_min.trim() === '' ||
+          !Number.isFinite(minRating) ||
+          minRating < 1 ||
+          minRating > 5)) ||
+      (rating_max !== undefined &&
+        (rating_max.trim() === '' ||
+          !Number.isFinite(maxRating) ||
+          maxRating < 1 ||
+          maxRating > 5)) ||
+      (minRating !== null &&
+        maxRating !== null &&
+        minRating > maxRating)
+    ) {
+      return res.status(400).json({
+        error: 'Rentang rating harus berada antara 1 sampai 5 dan nilai minimum tidak boleh melebihi maksimum.'
+      });
+    }
+
+    // Ambil resource yang sudah disetujui
+    let query = supabaseAdmin
+      .from('resource')
+      .select(`
+        resource_id,
+        judul,
+        deskripsi,
+        sumber,
+        created_at,
+        category_id,
+        matkul_id,
+        semester_id,
+        prodi_id,
+        fakultas_id,
+        link_file,
+        kategori (
+          category_id,
+          nama_kategori
+        )
+      `)
+      .eq('status', 'approved');
+
+    if (category_id) query = query.eq('category_id', category_id);
+    if (matkul_id) query = query.eq('matkul_id', matkul_id);
+    if (semester_id) query = query.eq('semester_id', semester_id);
+    if (prodi_id) query = query.eq('prodi_id', prodi_id);
+    if (fakultas_id) query = query.eq('fakultas_id', fakultas_id);
+
+    if (tahun !== undefined) {
+      query = query
+        .gte('created_at', `${tahun}-01-01T00:00:00.000Z`)
+        .lt(
+          'created_at',
+          `${Number(tahun) + 1}-01-01T00:00:00.000Z`
+        );
+    }
+
+    const { data: resourceData, error: resourceError } = await query;
+
+    if (resourceError) throw resourceError;
+
+    // Filter pencarian dan format tanpa .or() yang saling menimpa
+    let resources = resourceData ?? [];
+
+    if (q !== undefined) {
+      const keyword = q.trim().toLowerCase();
+
+      resources = resources.filter(resource =>
+        `${resource.judul ?? ''} ${resource.deskripsi ?? ''}`
+          .toLowerCase()
+          .includes(keyword)
+      );
+    }
+
+    if (format !== undefined) {
+      const ekstensiYangDidukung =
+        formatYangDidukung[format.toLowerCase()];
+
+      resources = resources.filter(resource => {
+        const namaFile = (resource.link_file ?? '')
+          .split('?')[0]
+          .toLowerCase();
+
+        return ekstensiYangDidukung.some(ext =>
+          namaFile.endsWith(`.${ext}`)
+        );
+      });
+    }
+
+    // Ambil data rating
+    const { data: ratingData, error: ratingError } =
+      await supabaseAdmin
+        .from('rating_review')
+        .select('resource_id, nilai_rating');
+
+    if (ratingError) throw ratingError;
+
+    // Hitung rata-rata rating per resource
+    const rekapRating = {};
+
+    for (const item of ratingData ?? []) {
+      if (
+        item.resource_id == null ||
+        item.nilai_rating == null
+      ) {
+        continue;
+      }
+
+      if (!rekapRating[item.resource_id]) {
+        rekapRating[item.resource_id] = {
+          total: 0,
+          jumlah: 0
+        };
+      }
+
+      rekapRating[item.resource_id].total +=
+        Number(item.nilai_rating);
+
+      rekapRating[item.resource_id].jumlah += 1;
+    }
+
+    const rataRating = {};
+
+    for (const [resourceId, nilai] of Object.entries(rekapRating)) {
+      rataRating[resourceId] = nilai.total / nilai.jumlah;
+    }
+
+    // Tambahkan rata-rata rating pada resource
+    resources = resources.map(resource => ({
+      ...resource,
+      rating_rata_rata:
+        rataRating[resource.resource_id] ?? null
+    }));
+
+    // Filter berdasarkan rata-rata rating
+    if (minRating !== null || maxRating !== null) {
+      resources = resources.filter(resource => {
+        const rating = resource.rating_rata_rata;
+
+        if (rating === null) return false;
+        if (minRating !== null && rating < minRating) return false;
+        if (maxRating !== null && rating > maxRating) return false;
+
+        return true;
+      });
+    }
+
+    // Sorting
+    const { column, ascending } = sorting[sort];
+
+    resources.sort((a, b) => {
+      let hasil;
+
+      if (column === 'judul') {
+        hasil = (a.judul ?? '').localeCompare(b.judul ?? '');
+      } else {
+        hasil = new Date(a.created_at).getTime() -
+          new Date(b.created_at).getTime();
+      }
+
+      return ascending ? hasil : -hasil;
+    });
+
+    // Pagination dilakukan setelah semua filter
+    const totalData = resources.length;
+    const totalHalaman = Math.ceil(totalData / limit);
+    const from = (page - 1) * limit;
+
+    const dataHalaman = resources
+      .slice(from, from + limit)
+      .map(({ link_file, ...resource }) => resource);
+
+    return res.status(200).json({
+      message: 'Data resource relevan berhasil diambil!',
+      pagination: {
+        halaman: page,
+        per_halaman: limit,
+        total_data: totalData,
+        total_halaman: totalHalaman
+      },
+      filters: {
+        q: q?.trim() || null,
+        category_id: category_id || null,
+        matkul_id: matkul_id || null,
+        semester_id: semester_id || null,
+        prodi_id: prodi_id || null,
+        fakultas_id: fakultas_id || null,
+        format: format || null,
+        tahun: tahun || null,
+        rating_min: minRating,
+        rating_max: maxRating,
+        sort
+      },
+      data: dataHalaman
+    });
+  } catch (err) {
+    console.error(
+      'Gagal mengambil resource relevan:',
+      err.message
+    );
+
+    return res.status(500).json({
+      error: 'Terjadi kesalahan saat mengambil resource relevan.'
+    });
+  }
+});
+
+
+
+/**
+ * @swagger
+ * /resource/search:
+ *   get:
+ *     summary: Mencari resource
+ *     description: Mencari resource yang telah disetujui berdasarkan judul atau deskripsi.
+ *     tags: [Resource]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Kata kunci pencarian
+ *     responses:
+ *       200:
+ *         description: Hasil pencarian berhasil diambil
+ *       400:
+ *         description: Kata pencarian wajib diisi
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       500:
+ *         description: Terjadi kesalahan saat mencari resource
+ */
+
+ // SEARCH RESOURCE
+app.get('/resource/search', authMiddleware, async (req, res) => {
   try {
     const { q } = req.query;
 
-    if (!q) {
+    if (!q || !q.trim()) {
       return res.status(400).json({
         error: 'Kata pencarian wajib diisi'
       });
@@ -687,14 +1610,20 @@ app.get('/resource/search', async (req, res) => {
         judul,
         deskripsi,
         sumber,
-        link_file,
         status,
         user_id,
+        category_id,
+        matkul_id,
+        kategori (
+          category_id,
+          nama_kategori
+        ),
         semester_id,
         prodi_id,
         fakultas_id
       `)
-      .or(`judul.ilike.%${q}%,deskripsi.ilike.%${q}%`);
+      .eq('status', 'approved')
+      .or(`judul.ilike.%${q.trim()}%,deskripsi.ilike.%${q.trim()}%`);
 
     if (error) {
       throw error;
@@ -706,19 +1635,66 @@ app.get('/resource/search', async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
+    console.error('Gagal mencari resource:', err.message);
 
     res.status(500).json({
-      error: err.message
+      error: 'Terjadi kesalahan saat mencari resource.'
     });
   }
 });
 
 
-// FILTER RESOURCE
-app.get('/resource/filter', async (req, res) => {
+/**
+ * @swagger
+ * /resource/filter:
+ *   get:
+ *     summary: Memfilter resource
+ *     description: Memfilter resource yang telah disetujui berdasarkan kategori, mata kuliah, semester, program studi, atau fakultas.
+ *     tags: [Resource]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: category_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *       - in: query
+ *         name: matkul_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *       - in: query
+ *         name: semester_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *       - in: query
+ *         name: prodi_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *       - in: query
+ *         name: fakultas_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Resource berhasil difilter
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       500:
+ *         description: Terjadi kesalahan saat memfilter resource
+ */
+
+
+ // FILTER RESOURCE
+app.get('/resource/filter', authMiddleware, async (req, res) => {
   try {
     const {
+      category_id,
+      matkul_id,
       semester_id,
       prodi_id,
       fakultas_id
@@ -731,13 +1707,27 @@ app.get('/resource/filter', async (req, res) => {
         judul,
         deskripsi,
         sumber,
-        link_file,
         status,
         user_id,
+        category_id,
+        matkul_id,
+        kategori (
+          category_id,
+          nama_kategori
+        ),
         semester_id,
         prodi_id,
         fakultas_id
-      `);
+      `)
+      .eq('status', 'approved');
+
+    if (category_id) {
+      query = query.eq('category_id', category_id);
+    }
+
+    if (matkul_id) {
+      query = query.eq('matkul_id', matkul_id);
+    }
 
     if (semester_id) {
       query = query.eq('semester_id', semester_id);
@@ -763,16 +1753,46 @@ app.get('/resource/filter', async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
+    console.error('Gagal memfilter resource:', err.message);
 
     res.status(500).json({
-      error: err.message
+      error: 'Terjadi kesalahan saat memfilter resource.'
     });
   }
 });
 
+
+
+/**
+ * @swagger
+ * /resource/{id}:
+ *   get:
+ *     summary: Mengambil detail resource
+ *     description: Mengambil detail resource yang telah disetujui tanpa menyertakan link_file.
+ *     tags: [Resource]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Detail resource berhasil diambil
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       404:
+ *         description: Resource tidak ditemukan
+ *       500:
+ *         description: Terjadi kesalahan saat mengambil detail resource
+ */
+
+
 // GET DETAIL RESOURCE
-app.get('/resource/:id', async (req, res) => {
+app.get('/resource/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -786,34 +1806,157 @@ app.get('/resource/:id', async (req, res) => {
         link_file,
         status,
         user_id,
+        category_id,
+        kategori (
+          category_id,
+          nama_kategori
+        ),
+        matkul_id,
         semester_id,
         prodi_id,
         fakultas_id
       `)
       .eq('resource_id', id)
-      .single();
+      .eq('status', 'approved')
+      .maybeSingle();
 
     if (error) {
+      throw error;
+    }
+
+    if (!data) {
       return res.status(404).json({
         error: 'Resource tidak ditemukan'
       });
     }
 
-    res.status(200).json({
-      message: 'Detail resource berhasil diambil!',
-      data
-    });
+   const { link_file, ...detailResource } = data;
+
+res.status(200).json({
+  message: 'Detail resource berhasil diambil!',
+  data: detailResource
+});
 
   } catch (err) {
-    console.error(err);
+    console.error('Gagal mengambil detail resource:', err.message);
 
     res.status(500).json({
-      error: err.message
+      error: 'Terjadi kesalahan saat mengambil detail resource.'
     });
   }
 });
 
-// TAMBAH BOOKMARK
+
+
+/**
+ * @swagger
+ * /resource/{id}/file:
+ *   get:
+ *     summary: Mengakses file resource
+ *     description: Membuat signed URL sementara untuk file resource yang telah disetujui. URL berlaku selama 60 detik.
+ *     tags: [Resource]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Akses file berhasil dibuat
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       404:
+ *         description: Resource atau file tidak ditemukan
+ *       500:
+ *         description: Terjadi kesalahan saat mengakses file
+ */
+
+
+/* GET FILE RESOURCE — WAJIB LOGIN */
+app.get('/resource/:id/file', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Pastikan resource ada dan sudah disetujui
+    const { data: resource, error } = await supabaseAdmin
+      .from('resource')
+      .select('resource_id, link_file, status')
+      .eq('resource_id', id)
+      .eq('status', 'approved')
+      .maybeSingle();
+
+    if (error) throw error;
+
+    if (!resource || !resource.link_file) {
+      return res.status(404).json({
+        error: 'Resource atau file tidak ditemukan'
+      });
+    }
+
+    // Buat URL sementara untuk file
+    const { data, error: storageError } = await supabaseAdmin
+      .storage
+      .from('materi-files')
+      .createSignedUrl(resource.link_file, 60);
+
+    if (storageError) throw storageError;
+
+    return res.status(200).json({
+      message: 'Akses file berhasil dibuat',
+      data: {
+        file_url: data.signedUrl
+      }
+    });
+  } catch (err) {
+    console.error('Gagal mengakses file resource:', err.message);
+    return res.status(500).json({
+      error: 'Terjadi kesalahan saat mengakses file'
+    });
+  }
+});
+
+
+/**
+ * @swagger
+ * /bookmark:
+ *   post:
+ *     summary: Menambahkan bookmark
+ *     description: Menambahkan resource ke bookmark mahasiswa.
+ *     tags: [Bookmark]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [resource_id]
+ *             properties:
+ *               resource_id:
+ *                 type: string
+ *                 format: uuid
+ *     responses:
+ *       201:
+ *         description: Resource berhasil ditambahkan ke bookmark
+ *       400:
+ *         description: resource_id wajib diisi
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Akses hanya untuk mahasiswa
+ *       409:
+ *         description: Resource sudah ada di bookmark
+ *       500:
+ *         description: Terjadi kesalahan saat menambahkan bookmark
+ */
+
+
+ // TAMBAH BOOKMARK
 app.post(
   '/bookmark',
   authMiddleware,
@@ -828,7 +1971,29 @@ app.post(
           error: 'resource_id wajib diisi'
         });
       }
+     
+      // Periksa apakah bookmark sudah ada
+      const { data: existingBookmarks, error: checkError } =
+        await supabaseAdmin
+          .from('bookmark')
+          .select('user_id, resource_id')
+          .eq('user_id', user_id)
+          .eq('resource_id', resource_id)
+          .limit(1);
 
+      if (checkError) {
+        throw checkError;
+      }
+
+      if (existingBookmarks && existingBookmarks.length > 0) {
+        return res.status(409).json({
+          error: 'Resource sudah ada di bookmark!'
+        });
+      }
+
+      // Tambahkan bookmark jika belum ada
+
+      // Tambahkan bookmark jika belum ada
       const { data, error } = await supabaseAdmin
         .from('bookmark')
         .insert([
@@ -843,22 +2008,44 @@ app.post(
         throw error;
       }
 
-      res.status(201).json({
+      return res.status(201).json({
         message: 'Resource berhasil ditambahkan ke bookmark!',
         data
       });
 
     } catch (err) {
-      console.error(err);
+      console.error('Gagal menambahkan bookmark:', err.message);
 
-      res.status(500).json({
-        error: err.message
+      return res.status(500).json({
+        error: 'Terjadi kesalahan saat menambahkan bookmark.'
       });
     }
   }
 );
 
-// GET BOOKMARK MILIK USER
+
+/**
+ * @swagger
+ * /bookmark:
+ *   get:
+ *     summary: Mengambil bookmark mahasiswa
+ *     description: Mengambil daftar bookmark milik mahasiswa yang sedang login.
+ *     tags: [Bookmark]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Data bookmark berhasil diambil
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Akses hanya untuk mahasiswa
+ *       500:
+ *         description: Terjadi kesalahan saat mengambil bookmark
+ */
+
+
+ // GET BOOKMARK MILIK USER
 app.get(
   '/bookmark',
   authMiddleware,
@@ -877,7 +2064,6 @@ app.get(
             judul,
             deskripsi,
             sumber,
-            link_file,
             status,
             semester_id,
             prodi_id,
@@ -905,7 +2091,39 @@ app.get(
   }
 );
 
-// HAPUS BOOKMARK
+
+
+/**
+ * @swagger
+ * /bookmark/{resource_id}:
+ *   delete:
+ *     summary: Menghapus bookmark
+ *     description: Menghapus bookmark milik mahasiswa untuk resource tertentu.
+ *     tags: [Bookmark]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: resource_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Bookmark berhasil dihapus
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Akses hanya untuk mahasiswa
+ *       404:
+ *         description: Bookmark tidak ditemukan
+ *       500:
+ *         description: Terjadi kesalahan saat menghapus bookmark
+ */
+
+
+ // HAPUS BOOKMARK
 app.delete(
   '/bookmark/:resource_id',
   authMiddleware,
@@ -915,29 +2133,73 @@ app.delete(
       const { resource_id } = req.params;
       const user_id = req.user.user_id;
 
-      const { error } = await supabaseAdmin
+      const { data, error } = await supabaseAdmin
         .from('bookmark')
         .delete()
         .eq('user_id', user_id)
-        .eq('resource_id', resource_id);
+        .eq('resource_id', resource_id)
+        .select('user_id, resource_id');
 
       if (error) {
         throw error;
       }
 
-      res.status(200).json({
+      if (!data || data.length === 0) {
+        return res.status(404).json({
+          error: 'Bookmark tidak ditemukan.'
+        });
+      }
+
+      return res.status(200).json({
         message: 'Bookmark berhasil dihapus!'
       });
 
     } catch (err) {
-      console.error(err);
+      console.error('Gagal menghapus bookmark:', err.message);
 
-      res.status(500).json({
-        error: err.message
+      return res.status(500).json({
+        error: 'Terjadi kesalahan saat menghapus bookmark.'
       });
     }
   }
 );
+
+
+
+/**
+ * @swagger
+ * /experience:
+ *   post:
+ *     summary: Mengirim experience
+ *     description: Mahasiswa mengirim experience baru dengan status awal pending.
+ *     tags: [Experience]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [judul, konten]
+ *             properties:
+ *               judul:
+ *                 type: string
+ *               konten:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Experience berhasil dikirim
+ *       400:
+ *         description: Judul dan konten wajib diisi
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Akses hanya untuk mahasiswa
+ *       500:
+ *         description: Terjadi kesalahan saat mengirim experience
+ */
+
 
 // TAMBAH EXPERIENCE
 app.post(
@@ -990,6 +2252,23 @@ app.post(
   }
 );
 
+
+
+/**
+ * @swagger
+ * /experience:
+ *   get:
+ *     summary: Mengambil experience yang disetujui
+ *     description: Mengambil daftar experience dengan status approved. Dapat diakses tanpa login.
+ *     tags: [Experience]
+ *     responses:
+ *       200:
+ *         description: Data experience berhasil diambil
+ *       500:
+ *         description: Terjadi kesalahan saat mengambil data experience
+ */
+
+
 app.get('/experience', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -1007,19 +2286,62 @@ app.get('/experience', async (req, res) => {
       throw error;
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       message: 'Data experience berhasil diambil!',
       data
     });
 
   } catch (err) {
-    console.error(err);
+    console.error('Gagal mengambil data experience:', err.message);
 
-    res.status(500).json({
-      error: err.message
+    return res.status(500).json({
+      error: 'Terjadi kesalahan saat mengambil data experience.'
     });
   }
 });
+
+
+
+/**
+ * @swagger
+ * /report:
+ *   post:
+ *     summary: Mengirim report
+ *     description: Mahasiswa melaporkan satu resource atau satu experience.
+ *     tags: [Report]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [alasan]
+ *             properties:
+ *               alasan:
+ *                 type: string
+ *               resource_id:
+ *                 type: string
+ *                 format: uuid
+ *                 nullable: true
+ *               experience_id:
+ *                 type: string
+ *                 format: uuid
+ *                 nullable: true
+ *     responses:
+ *       201:
+ *         description: Report berhasil dikirim
+ *       400:
+ *         description: Alasan atau target report tidak valid
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Akses hanya untuk mahasiswa
+ *       500:
+ *         description: Terjadi kesalahan saat mengirim report
+ */
+
 
 // TAMBAH REPORT
 app.post(
@@ -1036,11 +2358,13 @@ app.post(
 
       const user_id = req.user.user_id;
 
-      if (!alasan) {
-        return res.status(400).json({
-          error: 'Alasan report wajib diisi'
-        });
-      }
+     
+if (typeof alasan !== 'string' || !alasan.trim()) {
+  return res.status(400).json({
+    error: 'Alasan report wajib diisi'
+  });
+}
+
 
       if (!resource_id && !experience_id) {
         return res.status(400).json({
@@ -1075,17 +2399,72 @@ app.post(
         data
       });
 
-    } catch (err) {
-      console.error(err);
+    
 
-      res.status(500).json({
-        error: err.message
-      });
-    }
+} catch (err) {
+  console.error('Gagal mengirim report:', err.message);
+
+  if (err.code === '23503') {
+    return res.status(400).json({
+      error: 'Resource atau experience yang dilaporkan tidak valid.'
+    });
+  }
+
+  return res.status(500).json({
+    error: 'Terjadi kesalahan saat mengirim report.'
+  });
+}
+
+
   }
 );
 
-// TAMBAH RATING & REVIEW
+
+
+/**
+ * @swagger
+ * /rating-review:
+ *   post:
+ *     summary: Mengirim atau memperbarui rating dan review
+ *     description: Mahasiswa memberikan rating 1 sampai 5 dan review opsional untuk resource.
+ *     tags: [Rating & Review]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [resource_id, nilai_rating]
+ *             properties:
+ *               resource_id:
+ *                 type: string
+ *                 format: uuid
+ *               nilai_rating:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 5
+ *               isi_review:
+ *                 type: string
+ *                 nullable: true
+ *     responses:
+ *       201:
+ *         description: Rating dan review berhasil dikirim
+ *       400:
+ *         description: Input tidak valid
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Akses hanya untuk mahasiswa
+ *       404:
+ *         description: Resource tidak ditemukan
+ *       500:
+ *         description: Terjadi kesalahan saat mengirim rating dan review
+ */
+
+
+ // TAMBAH RATING & REVIEW
 app.post(
   '/rating-review',
   authMiddleware,
@@ -1100,28 +2479,77 @@ app.post(
 
       const user_id = req.user.user_id;
 
-      if (!resource_id || !nilai_rating) {
+      // Validasi wajib isi
+      if (
+        !resource_id ||
+        nilai_rating === undefined ||
+        nilai_rating === null ||
+        nilai_rating === ''
+      ) {
         return res.status(400).json({
           error: 'resource_id dan nilai_rating wajib diisi'
         });
       }
 
+      // Validasi tipe rating
+      if (
+        typeof nilai_rating !== 'number' ||
+        !Number.isInteger(nilai_rating)
+      ) {
+        return res.status(400).json({
+          error: 'Nilai rating harus berupa bilangan bulat antara 1 sampai 5'
+        });
+      }
+
+      // Validasi rentang rating
       if (nilai_rating < 1 || nilai_rating > 5) {
         return res.status(400).json({
           error: 'Nilai rating harus antara 1 sampai 5'
         });
       }
+      
+      // Validasi format UUID resource_id
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+      if (!uuidRegex.test(resource_id)) {
+        return res.status(400).json({
+          error: 'Format resource_id tidak valid'
+        });
+      }
+
+
+      // Cek keberadaan resource
+      const { data: resource, error: resourceError } = await supabaseAdmin
+        .from('resource')
+        .select('resource_id')
+        .eq('resource_id', resource_id)
+        .maybeSingle();
+
+      if (resourceError) {
+        throw resourceError;
+      }
+
+      if (!resource) {
+        return res.status(404).json({
+          error: 'Resource tidak ditemukan'
+        });
+      }
+
+      // Simpan atau perbarui rating dan review
       const { data, error } = await supabaseAdmin
         .from('rating_review')
-        .insert([
+        .upsert(
           {
             resource_id,
             nilai_rating,
             isi_review: isi_review || null,
             user_id
+          },
+          {
+            onConflict: 'user_id,resource_id'
           }
-        ])
+        )
         .select();
 
       if (error) {
@@ -1133,15 +2561,40 @@ app.post(
         data
       });
 
-    } catch (err) {
-      console.error(err);
+    
+} catch (err) {
+  console.error('Gagal mengirim rating dan review:', err.message);
 
-      res.status(500).json({
-        error: err.message
-      });
-    }
+  return res.status(500).json({
+    error: 'Terjadi kesalahan saat mengirim rating dan review.'
+  });
+}
+
   }
 );
+
+
+/**
+ * @swagger
+ * /rating-review/{resource_id}:
+ *   get:
+ *     summary: Mengambil rating dan review resource
+ *     description: Mengambil daftar rating dan review berdasarkan ID resource. Dapat diakses tanpa login.
+ *     tags: [Rating & Review]
+ *     parameters:
+ *       - in: path
+ *         name: resource_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Rating dan review berhasil diambil
+ *       500:
+ *         description: Terjadi kesalahan saat mengambil rating dan review
+ */
+
 
 // GET RATING & REVIEW RESOURCE
 app.get('/rating-review/:resource_id', async (req, res) => {
@@ -1177,6 +2630,83 @@ app.get('/rating-review/:resource_id', async (req, res) => {
   }
 });
 
+
+/**
+ * @swagger
+ * /admin/resource:
+ *   get:
+ *     summary: Mengambil semua resource untuk admin
+ *     description: Mengambil seluruh data resource beserta informasi kategori yang terkait. Hanya dapat diakses oleh admin.
+ *     tags:
+ *       - Admin - Resource
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Data resource berhasil diambil
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Data resource berhasil diambil!
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       resource_id:
+ *                         type: string
+ *                         format: uuid
+ *                       judul:
+ *                         type: string
+ *                       deskripsi:
+ *                         type: string
+ *                       sumber:
+ *                         type: string
+ *                       link_file:
+ *                         type: string
+ *                         nullable: true
+ *                       status:
+ *                         type: string
+ *                       user_id:
+ *                         type: string
+ *                         format: uuid
+ *                       category_id:
+ *                         type: string
+ *                         format: uuid
+ *                       kategori:
+ *                         type: object
+ *                         nullable: true
+ *                         properties:
+ *                           category_id:
+ *                             type: string
+ *                             format: uuid
+ *                           nama_kategori:
+ *                             type: string
+ *                       matkul_id:
+ *                         type: string
+ *                         format: uuid
+ *                       semester_id:
+ *                         type: string
+ *                         format: uuid
+ *                       prodi_id:
+ *                         type: string
+ *                         format: uuid
+ *                       fakultas_id:
+ *                         type: string
+ *                         format: uuid
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Akses ditolak karena pengguna bukan admin
+ *       500:
+ *         description: Terjadi kesalahan pada server
+ */
+
+
 // ADMIN - GET SEMUA RESOURCE
 app.get(
   '/admin/resource',
@@ -1194,6 +2724,12 @@ app.get(
           link_file,
           status,
           user_id,
+        category_id,
+        kategori (
+            category_id,
+            nama_kategori
+        ),
+          matkul_id,
           semester_id,
           prodi_id,
           fakultas_id
@@ -1217,3 +2753,29 @@ app.get(
     }
   }
 );
+
+
+app.use((err, req, res, next) => {
+  console.error(err.message);
+
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({
+      error: 'Ukuran file maksimal 10 MB'
+    });
+  }
+
+  if (err.message === 'Format file tidak diizinkan.') {
+    return res.status(400).json({
+      error: 'Format file tidak diizinkan. Gunakan PDF, Word, PowerPoint, JPEG, PNG, atau WebP.'
+    });
+  }
+
+  return res.status(500).json({
+    error: 'Terjadi kesalahan pada server'
+  });
+});
+
+
+app.listen(PORT, () => {
+  console.log(`Server berjalan di http://localhost:${PORT}`);
+});
