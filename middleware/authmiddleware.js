@@ -43,7 +43,7 @@ const authMiddleware = async (req, res, next) => {
     const { data: pengguna, error: penggunaError } =
       await supabaseAdmin
         .from('pengguna')
-        .select('user_id, email, role')
+        .select('*')
         .eq('user_id', data.user.id)
         .single();
 

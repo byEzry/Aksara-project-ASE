@@ -11,7 +11,7 @@ import roleMiddleware from './middleware/roleMiddleware.js';
 import swaggerUi from 'swagger-ui-express';
 import swaggerSpec from './docs/swagger.js';
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 // agar server bisa membaca data berformat JSON dari client
 app.use(express.json())
@@ -83,7 +83,7 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseSecretKey, {
  * /register:
  *   post:
  *     summary: Registrasi pengguna
- *     description: Mendaftarkan pengguna melalui Supabase Auth dan menyimpan data pengguna dengan role mahasiswa.
+ *     description: Mendaftarkan pengguna melalui Supabase Auth dan menyimpan data profil lengkap (nama, nim, prodi, angkatan, kode kelas, minat) dengan role mahasiswa.
  *     tags:
  *       - Authentication
  *     requestBody:
@@ -104,6 +104,29 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseSecretKey, {
  *                 type: string
  *                 format: password
  *                 example: password123
+ *               nama:
+ *                 type: string
+ *                 example: Neila Ezry
+ *               nim:
+ *                 type: string
+ *                 example: 1301213000
+ *               prodi:
+ *                 type: string
+ *                 example: S1 Informatika
+ *               angkatan:
+ *                 type: integer
+ *                 example: 2025
+ *               kelas:
+ *                 type: string
+ *                 example: "03"
+ *               kode_kelas:
+ *                 type: string
+ *                 example: IF-49-03
+ *               minat:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: ["Software Engineering", "Web Development"]
  *     responses:
  *       201:
  *         description: Registrasi berhasil
@@ -116,7 +139,17 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseSecretKey, {
 
 app.post('/register', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { 
+      email, 
+      password, 
+      nama, 
+      nim, 
+      prodi, 
+      angkatan, 
+      kelas, 
+      kode_kelas: custom_kode_kelas, 
+      minat 
+    } = req.body;
 
     const { data, error } = await supabase.auth.signUp({
       email,
@@ -129,19 +162,73 @@ app.post('/register', async (req, res) => {
       });
     }
 
+    // 1. Tentukan kode program studi (IF, TI, RPL, DS)
+    let prodiCode = 'IF';
+    const prodiStr = String(prodi || '').toLowerCase();
+    if (prodiStr.includes('rekayasa') || prodiStr.includes('rpl')) {
+      prodiCode = 'RPL';
+    } else if (prodiStr.includes('teknologi informasi') || prodiStr.includes('ti')) {
+      prodiCode = 'TI';
+    } else if (prodiStr.includes('data') || prodiStr.includes('ds')) {
+      prodiCode = 'DS';
+    } else if (prodiStr.includes('informatika') || prodiStr.includes('if')) {
+      prodiCode = 'IF';
+    }
+
+    // 2. Tentukan kode angkatan (rumus: tahun - 1976, e.g. 2024 -> 48, 2025 -> 49, 2026 -> 50)
+    let angkatanCode = '';
+    const tahunNum = parseInt(angkatan, 10);
+    if (!isNaN(tahunNum) && tahunNum >= 1976) {
+      angkatanCode = String(tahunNum - 1976);
+    } else if (angkatan) {
+      angkatanCode = String(angkatan).slice(-2);
+    }
+
+    // 3. Tentukan nomor kelas 2 digit (misal 3 -> 03)
+    let nomorKelas = '';
+    if (kelas !== undefined && kelas !== null && kelas !== '') {
+      nomorKelas = String(kelas).trim();
+      if (/^\d+$/.test(nomorKelas)) {
+        nomorKelas = nomorKelas.padStart(2, '0');
+      }
+    }
+
+    // 4. Susun kode kelas format standar (contoh: IF-49-03)
+    let finalKodeKelas = custom_kode_kelas || '';
+    if (!finalKodeKelas && prodiCode && angkatanCode && nomorKelas) {
+      finalKodeKelas = `${prodiCode}-${angkatanCode}-${nomorKelas}`;
+    } else if (!finalKodeKelas && nomorKelas) {
+      finalKodeKelas = nomorKelas;
+    }
+
+    // 5. Normalisasi minat akademik menjadi array
+    let minatArray = [];
+    if (Array.isArray(minat)) {
+      minatArray = minat;
+    } else if (typeof minat === 'string' && minat.trim() !== '') {
+      minatArray = minat.split(',').map(m => m.trim()).filter(Boolean);
+    }
+
+    // 6. Siapkan data lengkap pengguna
+    const userData = {
+      user_id: data.user.id,
+      email: email,
+      role: 'mahasiswa',
+      nama: nama || null,
+      nim: nim || null,
+      prodi: prodi || null,
+      angkatan: tahunNum || null,
+      kode_kelas: finalKodeKelas || null,
+      minat: minatArray
+    };
+
     // Simpan data user ke tabel pengguna
     const { error: penggunaError } = await supabaseAdmin
       .from('pengguna')
-      .insert([
-        {
-          user_id: data.user.id,
-          email: email,
-          role: 'mahasiswa'
-        }
-      ]);
+      .insert([userData]);
 
     if (penggunaError) {
-      console.error(penggunaError);
+      console.error('Error saat menyimpan profil pengguna:', penggunaError);
 
       return res.status(500).json({
         error: penggunaError.message
@@ -150,7 +237,10 @@ app.post('/register', async (req, res) => {
 
     res.status(201).json({
       message: "Registrasi berhasil!",
-      data: data
+      data: {
+        ...data,
+        profile: userData
+      }
     });
 
   } catch (err) {
@@ -168,7 +258,7 @@ app.post('/register', async (req, res) => {
  * /login:
  *   post:
  *     summary: Login pengguna
- *     description: Memverifikasi email dan password pengguna melalui Supabase Auth.
+ *     description: Memverifikasi email dan password pengguna melalui Supabase Auth serta mengembalikan data profil dan peran (role) lengkap.
  *     tags:
  *       - Authentication
  *     requestBody:
@@ -191,7 +281,7 @@ app.post('/register', async (req, res) => {
  *                 example: password123
  *     responses:
  *       200:
- *         description: Login berhasil
+ *         description: Login berhasil beserta data profil
  *       401:
  *         description: Email atau password gagal diverifikasi
  *       500:
@@ -214,9 +304,23 @@ app.post('/login', async (req, res) => {
       });
     }
 
+    // Ambil data profil dari tabel pengguna
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('pengguna')
+      .select('*')
+      .eq('user_id', data.user.id)
+      .maybeSingle();
+
+    if (profileError) {
+      console.error('Gagal mengambil profil saat login:', profileError.message);
+    }
+
     res.status(200).json({
       message: "Login berhasil!",
-      data: data
+      data: {
+        ...data,
+        profile: profile || null
+      }
     });
 
   } catch (err) {
@@ -230,10 +334,43 @@ app.post('/login', async (req, res) => {
 
 /**
  * @swagger
+ * /me:
+ *   get:
+ *     summary: Mengambil profil pengguna yang sedang login
+ *     description: Mengembalikan data profil lengkap pengguna yang sedang aktif berdasarkan Bearer token.
+ *     tags:
+ *       - Authentication
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Profil berhasil diambil
+ *       401:
+ *         description: Token tidak valid atau belum login
+ *       500:
+ *         description: Terjadi kesalahan server
+ */
+app.get('/me', authMiddleware, async (req, res) => {
+  try {
+    return res.status(200).json({
+      message: 'Profil pengguna berhasil diambil',
+      data: req.user
+    });
+  } catch (err) {
+    console.error('Gagal mengambil data /me:', err);
+    return res.status(500).json({
+      error: err.message
+    });
+  }
+});
+
+
+/**
+ * @swagger
  * /admin/report:
  *   get:
  *     summary: Mengambil daftar laporan
- *     description: Mengambil seluruh data laporan. Hanya pengguna dengan role admin yang dapat mengakses endpoint ini.
+ *     description: Mengambil seluruh data laporan beserta status, catatan admin, tanggal laporan, dan data pelapor. Hanya admin yang dapat mengakses endpoint ini.
  *     tags:
  *       - Admin - Report
  *     security:
@@ -241,31 +378,6 @@ app.post('/login', async (req, res) => {
  *     responses:
  *       200:
  *         description: Data report berhasil diambil
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: Data report berhasil diambil!
- *                 data:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       report_id:
- *                         type: string
- *                       alasan:
- *                         type: string
- *                       user_id:
- *                         type: string
- *                       resource_id:
- *                         type: string
- *                         nullable: true
- *                       experience_id:
- *                         type: string
- *                         nullable: true
  *       401:
  *         description: Token tidak valid atau tidak tersedia
  *       403:
@@ -273,7 +385,6 @@ app.post('/login', async (req, res) => {
  *       500:
  *         description: Gagal mengambil data report
  */
-
 
 app.get(
   '/admin/report',
@@ -286,10 +397,19 @@ app.get(
         .select(`
           report_id,
           alasan,
+          status,
+          catatan_admin,
+          created_at,
           user_id,
+          pengguna:user_id (
+            nama,
+            nim,
+            prodi
+          ),
           resource_id,
           experience_id
-        `);
+        `)
+        .order('created_at', { ascending: false });
 
       if (error) throw error;
 
@@ -314,7 +434,7 @@ app.get(
  * /admin/report/{id}:
  *   get:
  *     summary: Mengambil detail laporan
- *     description: Mengambil detail laporan beserta resource atau experience yang dilaporkan. Hanya admin yang dapat mengakses endpoint ini.
+ *     description: Mengambil detail laporan beserta data pelapor dan resource atau experience yang dilaporkan.
  *     tags:
  *       - Admin - Report
  *     security:
@@ -330,33 +450,6 @@ app.get(
  *     responses:
  *       200:
  *         description: Detail laporan berhasil diambil
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: Detail laporan berhasil diambil!
- *                 data:
- *                   type: object
- *                   properties:
- *                     report_id:
- *                       type: string
- *                     alasan:
- *                       type: string
- *                     user_id:
- *                       type: string
- *                     resource_id:
- *                       type: string
- *                       nullable: true
- *                     experience_id:
- *                       type: string
- *                       nullable: true
- *                     konten_dilaporkan:
- *                       type: object
- *                       nullable: true
- *                       description: Data resource atau experience yang dilaporkan
  *       401:
  *         description: Token tidak valid atau tidak tersedia
  *       403:
@@ -380,7 +473,15 @@ app.get(
         .select(`
           report_id,
           alasan,
+          status,
+          catatan_admin,
+          created_at,
           user_id,
+          pengguna:user_id (
+            nama,
+            nim,
+            prodi
+          ),
           resource_id,
           experience_id
         `)
@@ -400,7 +501,20 @@ app.get(
       if (report.resource_id) {
         const { data, error } = await supabaseAdmin
           .from('resource')
-          .select('resource_id, judul, deskripsi, sumber, status')
+          .select(`
+            resource_id, 
+            judul, 
+            deskripsi, 
+            sumber, 
+            status, 
+            created_at,
+            format_file,
+            pengguna:user_id (
+              nama,
+              nim,
+              prodi
+            )
+          `)
           .eq('resource_id', report.resource_id)
           .maybeSingle();
 
@@ -409,7 +523,20 @@ app.get(
       } else if (report.experience_id) {
         const { data, error } = await supabaseAdmin
           .from('experience')
-          .select('experience_id, judul, konten, status')
+          .select(`
+            experience_id, 
+            judul, 
+            sub_judul,
+            konten, 
+            status,
+            created_at,
+            sampul,
+            pengguna:user_id (
+              nama,
+              nim,
+              prodi
+            )
+          `)
           .eq('experience_id', report.experience_id)
           .maybeSingle();
 
@@ -430,6 +557,102 @@ app.get(
 
       return res.status(500).json({
         error: 'Gagal mengambil detail laporan'
+      });
+    }
+  }
+);
+
+
+/**
+ * @swagger
+ * /admin/report/{id}/status:
+ *   put:
+ *     summary: Memperbarui status laporan
+ *     description: Mengubah status laporan menjadi baru, ditinjau, atau selesai dan menambahkan catatan admin.
+ *     tags:
+ *       - Admin - Report
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: ID laporan yang akan diperbarui
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [baru, ditinjau, selesai]
+ *                 example: selesai
+ *               catatan_admin:
+ *                 type: string
+ *                 example: Laporan telah ditindaklanjuti dan konten bermasalah telah dihapus.
+ *     responses:
+ *       200:
+ *         description: Status laporan berhasil diperbarui
+ *       400:
+ *         description: Status tidak valid
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Bukan admin
+ *       500:
+ *         description: Terjadi kesalahan server
+ */
+app.put(
+  '/admin/report/:id/status',
+  authMiddleware,
+  roleMiddleware('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status, catatan_admin } = req.body;
+
+      if (!status) {
+        return res.status(400).json({
+          error: 'Status wajib diisi'
+        });
+      }
+
+      const statusAllowed = ['baru', 'ditinjau', 'selesai'];
+      if (!statusAllowed.includes(status)) {
+        return res.status(400).json({
+          error: 'Status harus bernilai baru, ditinjau, atau selesai'
+        });
+      }
+
+      const updatePayload = { status };
+      if (catatan_admin !== undefined) {
+        updatePayload.catatan_admin = catatan_admin;
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('report')
+        .update(updatePayload)
+        .eq('report_id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      return res.status(200).json({
+        message: 'Status laporan berhasil diperbarui!',
+        data
+      });
+    } catch (err) {
+      console.error('Gagal memperbarui status laporan:', err);
+      return res.status(500).json({
+        error: 'Gagal memperbarui status laporan'
       });
     }
   }
@@ -491,10 +714,21 @@ app.get(
         .select(`
           experience_id,
           judul,
+          sub_judul,
           konten,
+          kategori,
+          tags,
+          sampul,
           status,
-          user_id
-        `);
+          created_at,
+          user_id,
+          pengguna:user_id (
+            nama,
+            nim,
+            prodi
+          )
+        `)
+        .order('created_at', { ascending: false });
 
       if (error) throw error;
 
@@ -614,7 +848,7 @@ app.put(
  * /admin/resource/{id}/status:
  *   put:
  *     summary: Memperbarui status resource
- *     description: Mengubah status resource menjadi approved atau rejected. Hanya admin yang dapat mengakses endpoint ini.
+ *     description: Mengubah status resource menjadi approved, rejected, atau hidden. Jika rejected, admin dapat menyertakan alasan_penolakan. Hanya admin yang dapat mengakses endpoint ini.
  *     tags:
  *       - Admin - Resource
  *     security:
@@ -641,7 +875,11 @@ app.put(
  *                 enum:
  *                   - approved
  *                   - rejected
- *                 example: approved
+ *                   - hidden
+ *                 example: rejected
+ *               alasan_penolakan:
+ *                 type: string
+ *                 example: File tidak terbaca atau melanggar hak cipta
  *     responses:
  *       200:
  *         description: Status resource berhasil diperbarui
@@ -664,7 +902,7 @@ app.put(
   async (req, res) => {
     try {
       const { id } = req.params;
-      const { status } = req.body;
+      const { status, alasan_penolakan } = req.body;
 
       if (!status) {
         return res.status(400).json({
@@ -672,17 +910,22 @@ app.put(
         });
       }
 
-      const statusAllowed = ['approved', 'rejected'];
+      const statusAllowed = ['approved', 'rejected', 'hidden'];
 
       if (!statusAllowed.includes(status)) {
         return res.status(400).json({
-          error: 'Status harus approved atau rejected'
+          error: 'Status harus approved, rejected, atau hidden'
         });
+      }
+
+      const updateData = { status };
+      if (alasan_penolakan !== undefined) {
+        updateData.alasan_penolakan = alasan_penolakan;
       }
 
       const { data, error } = await supabaseAdmin
         .from('resource')
-        .update({ status })
+        .update(updateData)
         .eq('resource_id', id)
         .select()
         .single();
@@ -699,6 +942,111 @@ app.put(
 
       res.status(500).json({
         error: 'Gagal memperbarui status resource'
+      });
+    }
+  }
+);
+
+
+/**
+ * @swagger
+ * /admin/resource/{id}:
+ *   delete:
+ *     summary: Menghapus resource oleh admin
+ *     description: Menghapus resource yang melanggar (plagiasi/hak cipta) secara permanen beserta seluruh bookmark, ulasan, laporan terkait, dan file fisik di storage. Hanya admin yang dapat mengakses endpoint ini.
+ *     tags:
+ *       - Admin - Resource
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: ID resource yang akan dihapus
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Resource dan data terkait berhasil dihapus
+ *       401:
+ *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Pengguna tidak memiliki role admin
+ *       404:
+ *         description: Resource tidak ditemukan
+ *       500:
+ *         description: Gagal menghapus resource
+ */
+app.delete(
+  '/admin/resource/:id',
+  authMiddleware,
+  roleMiddleware('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // 1. Ambil info resource terlebih dahulu (terutama link_file)
+      const { data: resource, error: getErr } = await supabaseAdmin
+        .from('resource')
+        .select('resource_id, link_file')
+        .eq('resource_id', id)
+        .maybeSingle();
+
+      if (getErr) throw getErr;
+
+      if (!resource) {
+        return res.status(404).json({
+          error: 'Resource tidak ditemukan'
+        });
+      }
+
+      // 2. Bersihkan bookmark terkait
+      await supabaseAdmin
+        .from('bookmark')
+        .delete()
+        .eq('resource_id', id);
+
+      // 3. Bersihkan ulasan / rating terkait
+      await supabaseAdmin
+        .from('rating_review')
+        .delete()
+        .eq('resource_id', id);
+
+      // 4. Bersihkan laporan terkait
+      await supabaseAdmin
+        .from('report')
+        .delete()
+        .eq('resource_id', id);
+
+      // 5. Hapus file fisik dari storage jika ada
+      if (resource.link_file) {
+        try {
+          await supabaseAdmin
+            .storage
+            .from('materi-files')
+            .remove([resource.link_file]);
+        } catch (storageErr) {
+          console.warn('File fisik di storage gagal dihapus:', storageErr.message);
+        }
+      }
+
+      // 6. Hapus resource utama dari database
+      const { error: deleteErr } = await supabaseAdmin
+        .from('resource')
+        .delete()
+        .eq('resource_id', id);
+
+      if (deleteErr) throw deleteErr;
+
+      return res.status(200).json({
+        message: 'Resource dan seluruh data terkait berhasil dihapus oleh admin'
+      });
+
+    } catch (err) {
+      console.error('Gagal menghapus resource oleh admin:', err);
+      return res.status(500).json({
+        error: 'Terjadi kesalahan saat menghapus resource'
       });
     }
   }
@@ -909,9 +1257,15 @@ if (contentType && contentType.startsWith('image/')) {
         throw storageError;
       }
 
-      // 7. Ambil URL file
-
+      // 7. Ambil URL file dan deteksi format file
       const link_file = `resource/${fileName}`;
+      let format_file = 'OTHER';
+      if (originalName) {
+        const ext = originalName.split('.').pop().toUpperCase();
+        if (['PDF', 'DOCX', 'DOC', 'PPTX', 'PPT', 'XLSX', 'XLS', 'ZIP', 'RAR', 'PNG', 'JPG', 'JPEG'].includes(ext)) {
+          format_file = ext;
+        }
+      }
 
       // 8. Simpan data resource ke database
       const { data, error: dbError } = await supabaseAdmin
@@ -922,6 +1276,9 @@ if (contentType && contentType.startsWith('image/')) {
             deskripsi,
             sumber,
             link_file,
+            format_file,
+            jumlah_unduhan: 0,
+            jumlah_dilihat: 0,
             status: 'pending',
             user_id,
             category_id,
@@ -1112,10 +1469,82 @@ app.get('/mata-kuliah', async (req, res) => {
 
 /**
  * @swagger
+ * /prodi:
+ *   get:
+ *     summary: Mengambil semua program studi
+ *     description: Mengambil daftar program studi untuk dropdown form pendaftaran, unggah materi, dan filter eksplorasi.
+ *     tags:
+ *       - Master Data
+ *     responses:
+ *       200:
+ *         description: Data program studi berhasil diambil
+ *       500:
+ *         description: Terjadi kesalahan server
+ */
+app.get('/prodi', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('program_studi')
+      .select('prodi_id, nama_prodi')
+      .order('nama_prodi', { ascending: true });
+
+    if (error) throw error;
+
+    res.status(200).json({
+      message: 'Data program studi berhasil diambil!',
+      data
+    });
+  } catch (err) {
+    console.error('Gagal mengambil data prodi:', err.message);
+    res.status(500).json({
+      error: 'Terjadi kesalahan saat mengambil data program studi.'
+    });
+  }
+});
+
+
+/**
+ * @swagger
+ * /semester:
+ *   get:
+ *     summary: Mengambil semua semester
+ *     description: Mengambil daftar semester untuk dropdown filter eksplorasi dan unggah resource.
+ *     tags:
+ *       - Master Data
+ *     responses:
+ *       200:
+ *         description: Data semester berhasil diambil
+ *       500:
+ *         description: Terjadi kesalahan server
+ */
+app.get('/semester', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('semester')
+      .select('semester_id, nama_semester')
+      .order('nama_semester', { ascending: true });
+
+    if (error) throw error;
+
+    res.status(200).json({
+      message: 'Data semester berhasil diambil!',
+      data
+    });
+  } catch (err) {
+    console.error('Gagal mengambil data semester:', err.message);
+    res.status(500).json({
+      error: 'Terjadi kesalahan saat mengambil data semester.'
+    });
+  }
+});
+
+
+/**
+ * @swagger
  * /resource:
  *   get:
  *     summary: Mendapatkan daftar resource yang disetujui
- *     description: Mengambil daftar resource berstatus approved. Field link_file tidak disertakan dalam respons.
+ *     description: Mengambil daftar resource berstatus approved beserta nama pengunggah, format file, dan statistik unduhan/view.
  *     tags:
  *       - Resource
  *     security:
@@ -1141,7 +1570,16 @@ app.get('/resource',  authMiddleware, async (req, res) => {
         deskripsi,
         sumber,
         status,
+        format_file,
+        jumlah_unduhan,
+        jumlah_dilihat,
+        created_at,
         user_id,
+        pengguna:user_id (
+          nama,
+          nim,
+          prodi
+        ),
         category_id,
         matkul_id,
         kategori (
@@ -1152,7 +1590,8 @@ app.get('/resource',  authMiddleware, async (req, res) => {
         prodi_id,
         fakultas_id
       `)
-      .eq('status', 'approved');
+      .eq('status', 'approved')
+      .order('created_at', { ascending: false });
 
     if (error) {
       throw error;
@@ -1804,8 +2243,17 @@ app.get('/resource/:id', authMiddleware, async (req, res) => {
         deskripsi,
         sumber,
         link_file,
+        format_file,
+        jumlah_unduhan,
+        jumlah_dilihat,
+        created_at,
         status,
         user_id,
+        pengguna:user_id (
+          nama,
+          nim,
+          prodi
+        ),
         category_id,
         kategori (
           category_id,
@@ -1830,12 +2278,20 @@ app.get('/resource/:id', authMiddleware, async (req, res) => {
       });
     }
 
-   const { link_file, ...detailResource } = data;
+    // Auto-increment jumlah_dilihat
+    const currentViews = data.jumlah_dilihat || 0;
+    await supabaseAdmin
+      .from('resource')
+      .update({ jumlah_dilihat: currentViews + 1 })
+      .eq('resource_id', id);
 
-res.status(200).json({
-  message: 'Detail resource berhasil diambil!',
-  data: detailResource
-});
+    const { link_file, ...detailResource } = data;
+    detailResource.jumlah_dilihat = currentViews + 1;
+
+    res.status(200).json({
+      message: 'Detail resource berhasil diambil!',
+      data: detailResource
+    });
 
   } catch (err) {
     console.error('Gagal mengambil detail resource:', err.message);
@@ -1853,7 +2309,7 @@ res.status(200).json({
  * /resource/{id}/file:
  *   get:
  *     summary: Mengakses file resource
- *     description: Membuat signed URL sementara untuk file resource yang telah disetujui. URL berlaku selama 60 detik.
+ *     description: Membuat signed URL sementara untuk file resource yang telah disetujui serta menambah counter jumlah_unduhan. URL berlaku selama 60 detik.
  *     tags: [Resource]
  *     security:
  *       - BearerAuth: []
@@ -1884,7 +2340,7 @@ app.get('/resource/:id/file', authMiddleware, async (req, res) => {
     // Pastikan resource ada dan sudah disetujui
     const { data: resource, error } = await supabaseAdmin
       .from('resource')
-      .select('resource_id, link_file, status')
+      .select('resource_id, link_file, status, jumlah_unduhan')
       .eq('resource_id', id)
       .eq('status', 'approved')
       .maybeSingle();
@@ -1896,6 +2352,13 @@ app.get('/resource/:id/file', authMiddleware, async (req, res) => {
         error: 'Resource atau file tidak ditemukan'
       });
     }
+
+    // Auto-increment jumlah_unduhan
+    const currentDownloads = resource.jumlah_unduhan || 0;
+    await supabaseAdmin
+      .from('resource')
+      .update({ jumlah_unduhan: currentDownloads + 1 })
+      .eq('resource_id', id);
 
     // Buat URL sementara untuk file
     const { data, error: storageError } = await supabaseAdmin
@@ -2206,11 +2669,16 @@ app.post(
   '/experience',
   authMiddleware,
   roleMiddleware('mahasiswa'),
+  upload.single('sampul'),
   async (req, res) => {
     try {
       const {
         judul,
-        konten
+        sub_judul,
+        konten,
+        kategori,
+        tags,
+        sampul: sampulBody
       } = req.body;
 
       const user_id = req.user.user_id;
@@ -2221,12 +2689,71 @@ app.post(
         });
       }
 
+      let sampulLink = sampulBody || null;
+
+      // Upload file gambar sampul jika dilampirkan
+      if (req.file) {
+        try {
+          let fileBuffer = req.file.buffer;
+          const originalName = req.file.originalname;
+          const safeName = originalName.replace(/\.[^/.]+$/, '').replace(/\s+/g, '_');
+          const fileName = `${Date.now()}-${safeName}.jpg`;
+
+          if (req.file.mimetype.startsWith('image/')) {
+            fileBuffer = await sharp(req.file.buffer)
+              .rotate()
+              .resize({ width: 1200, withoutEnlargement: true })
+              .jpeg({ quality: 80, mozjpeg: true })
+              .toBuffer();
+          }
+
+          const { error: storageError } = await supabaseAdmin
+            .storage
+            .from('uploads')
+            .upload(`experience/${fileName}`, fileBuffer, {
+              contentType: 'image/jpeg',
+              upsert: false
+            });
+
+          if (storageError) {
+            console.error('Gagal upload gambar sampul:', storageError);
+          } else {
+            const { data: pubData } = supabaseAdmin
+              .storage
+              .from('uploads')
+              .getPublicUrl(`experience/${fileName}`);
+
+            sampulLink = pubData?.publicUrl || `experience/${fileName}`;
+          }
+        } catch (uploadErr) {
+          console.warn('Gagal memproses file sampul wawasan:', uploadErr.message);
+        }
+      }
+
+      // Format tags menjadi array
+      let tagsArray = [];
+      if (Array.isArray(tags)) {
+        tagsArray = tags;
+      } else if (typeof tags === 'string' && tags.trim() !== '') {
+        try {
+          const parsed = JSON.parse(tags);
+          if (Array.isArray(parsed)) tagsArray = parsed;
+          else tagsArray = tags.split(',').map(t => t.trim()).filter(Boolean);
+        } catch (_) {
+          tagsArray = tags.split(',').map(t => t.trim()).filter(Boolean);
+        }
+      }
+
       const { data, error } = await supabaseAdmin
         .from('experience')
         .insert([
           {
             judul,
+            sub_judul: sub_judul || null,
             konten,
+            kategori: kategori || null,
+            tags: tagsArray,
+            sampul: sampulLink,
             status: 'pending',
             user_id
           }
@@ -2259,7 +2786,7 @@ app.post(
  * /experience:
  *   get:
  *     summary: Mengambil experience yang disetujui
- *     description: Mengambil daftar experience dengan status approved. Dapat diakses tanpa login.
+ *     description: Mengambil daftar experience dengan status approved beserta informasi penulis, sub_judul, kategori, tags, dan sampul.
  *     tags: [Experience]
  *     responses:
  *       200:
@@ -2276,11 +2803,22 @@ app.get('/experience', async (req, res) => {
       .select(`
         experience_id,
         judul,
+        sub_judul,
         konten,
+        kategori,
+        tags,
+        sampul,
         status,
-        user_id
+        created_at,
+        user_id,
+        pengguna:user_id (
+          nama,
+          nim,
+          prodi
+        )
       `)
-      .eq('status', 'approved');
+      .eq('status', 'approved')
+      .order('created_at', { ascending: false });
 
     if (error) {
       throw error;
@@ -2296,6 +2834,78 @@ app.get('/experience', async (req, res) => {
 
     return res.status(500).json({
       error: 'Terjadi kesalahan saat mengambil data experience.'
+    });
+  }
+});
+
+
+/**
+ * @swagger
+ * /experience/{id}:
+ *   get:
+ *     summary: Mengambil detail satu experience
+ *     description: Mengambil detail satu tulisan experience yang disetujui beserta data penulis.
+ *     tags: [Experience]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Detail experience berhasil diambil
+ *       404:
+ *         description: Experience tidak ditemukan
+ *       500:
+ *         description: Terjadi kesalahan server
+ */
+app.get('/experience/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await supabaseAdmin
+      .from('experience')
+      .select(`
+        experience_id,
+        judul,
+        sub_judul,
+        konten,
+        kategori,
+        tags,
+        sampul,
+        status,
+        created_at,
+        user_id,
+        pengguna:user_id (
+          nama,
+          nim,
+          prodi
+        )
+      `)
+      .eq('experience_id', id)
+      .eq('status', 'approved')
+      .maybeSingle();
+
+    if (error) throw error;
+
+    if (!data) {
+      return res.status(404).json({
+        error: 'Experience tidak ditemukan'
+      });
+    }
+
+    return res.status(200).json({
+      message: 'Detail experience berhasil diambil!',
+      data
+    });
+
+  } catch (err) {
+    console.error('Gagal mengambil detail experience:', err.message);
+
+    return res.status(500).json({
+      error: 'Terjadi kesalahan saat mengambil detail experience.'
     });
   }
 });
@@ -2722,18 +3332,29 @@ app.get(
           deskripsi,
           sumber,
           link_file,
+          format_file,
+          jumlah_unduhan,
+          jumlah_dilihat,
+          alasan_penolakan,
           status,
+          created_at,
           user_id,
-        category_id,
-        kategori (
-            category_id,
-            nama_kategori
-        ),
+          pengguna:user_id (
+            nama,
+            nim,
+            prodi
+          ),
+          category_id,
+          kategori (
+              category_id,
+              nama_kategori
+          ),
           matkul_id,
           semester_id,
           prodi_id,
           fakultas_id
-        `);
+        `)
+        .order('created_at', { ascending: false });
 
       if (error) {
         throw error;
