@@ -2775,6 +2775,12 @@ app.use((err, req, res, next) => {
   });
 });
 
+app.get("/healthz", (req, res) => {
+  res.status(200).json({
+    message: "Backend AKSARA berjalan dengan baik",
+  });
+});
+
 
 app.listen(PORT, () => {
   console.log(`Server berjalan di http://localhost:${PORT}`);
