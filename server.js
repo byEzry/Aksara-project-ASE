@@ -404,7 +404,8 @@ app.get(
           pengguna:user_id (
             nama,
             nim,
-            prodi
+            prodi,
+            email
           ),
           resource_id,
           experience_id
@@ -480,7 +481,8 @@ app.get(
           pengguna:user_id (
             nama,
             nim,
-            prodi
+            prodi,
+            email
           ),
           resource_id,
           experience_id
@@ -512,7 +514,8 @@ app.get(
             pengguna:user_id (
               nama,
               nim,
-              prodi
+              prodi,
+              email
             )
           `)
           .eq('resource_id', report.resource_id)
@@ -534,7 +537,8 @@ app.get(
             pengguna:user_id (
               nama,
               nim,
-              prodi
+              prodi,
+              email
             )
           `)
           .eq('experience_id', report.experience_id)
@@ -719,13 +723,15 @@ app.get(
           kategori,
           tags,
           sampul,
+          jumlah_dibaca,
           status,
           created_at,
           user_id,
           pengguna:user_id (
             nama,
             nim,
-            prodi
+            prodi,
+            email
           )
         `)
         .order('created_at', { ascending: false });
@@ -2308,8 +2314,8 @@ app.get('/resource/:id', authMiddleware, async (req, res) => {
  * @swagger
  * /resource/{id}/file:
  *   get:
- *     summary: Mengakses file resource
- *     description: Membuat signed URL sementara untuk file resource yang telah disetujui serta menambah counter jumlah_unduhan. URL berlaku selama 60 detik.
+ *     summary: Mengakses file resource (pratinjau atau unduh)
+ *     description: Membuat signed URL sementara untuk file resource (berlaku 60 detik). Admin dan pemilik dapat mengakses file dengan status apapun. Counter jumlah_unduhan hanya bertambah jika parameter action=download disertakan dan pengakses bukan admin.
  *     tags: [Resource]
  *     security:
  *       - BearerAuth: []
@@ -2320,11 +2326,24 @@ app.get('/resource/:id', authMiddleware, async (req, res) => {
  *         schema:
  *           type: string
  *           format: uuid
+ *       - in: query
+ *         name: action
+ *         schema:
+ *           type: string
+ *           enum: [preview, download]
+ *         description: Tentukan 'download' untuk mencatat unduhan, atau biarkan kosong / 'preview' untuk pratinjau tanpa menambah unduhan
+ *       - in: query
+ *         name: download
+ *         schema:
+ *           type: boolean
+ *         description: Alternatif flag boolean, jika true maka menambah counter unduhan
  *     responses:
  *       200:
  *         description: Akses file berhasil dibuat
  *       401:
  *         description: Token tidak valid atau tidak tersedia
+ *       403:
+ *         description: Dokumen belum disetujui dan pengguna tidak berhak mengakses
  *       404:
  *         description: Resource atau file tidak ditemukan
  *       500:
@@ -2336,13 +2355,13 @@ app.get('/resource/:id', authMiddleware, async (req, res) => {
 app.get('/resource/:id/file', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
+    const { action, download } = req.query;
 
-    // Pastikan resource ada dan sudah disetujui
+    // Ambil data resource beserta user_id untuk memeriksa hak akses
     const { data: resource, error } = await supabaseAdmin
       .from('resource')
-      .select('resource_id, link_file, status, jumlah_unduhan')
+      .select('resource_id, link_file, status, jumlah_unduhan, user_id')
       .eq('resource_id', id)
-      .eq('status', 'approved')
       .maybeSingle();
 
     if (error) throw error;
@@ -2353,14 +2372,27 @@ app.get('/resource/:id/file', authMiddleware, async (req, res) => {
       });
     }
 
-    // Auto-increment jumlah_unduhan
-    const currentDownloads = resource.jumlah_unduhan || 0;
-    await supabaseAdmin
-      .from('resource')
-      .update({ jumlah_unduhan: currentDownloads + 1 })
-      .eq('resource_id', id);
+    const isAdmin = req.user && req.user.role === 'admin';
+    const isOwner = req.user && req.user.user_id === resource.user_id;
 
-    // Buat URL sementara untuk file
+    // Jika bukan admin dan bukan pemilik file, dokumen WAJIB berstatus approved
+    if (resource.status !== 'approved' && !isAdmin && !isOwner) {
+      return res.status(403).json({
+        error: 'Dokumen belum disetujui dan hanya dapat diakses oleh admin atau pengunggah.'
+      });
+    }
+
+    // Auto-increment jumlah_unduhan HANYA JIKA aksi unduh (Opsi A) dan pengakses bukan admin
+    const isDownloadAction = action === 'download' || download === 'true';
+    if (isDownloadAction && !isAdmin) {
+      const currentDownloads = resource.jumlah_unduhan || 0;
+      await supabaseAdmin
+        .from('resource')
+        .update({ jumlah_unduhan: currentDownloads + 1 })
+        .eq('resource_id', id);
+    }
+
+    // Buat URL sementara untuk file (berlaku 60 detik)
     const { data, error: storageError } = await supabaseAdmin
       .storage
       .from('materi-files')
@@ -2388,7 +2420,7 @@ app.get('/resource/:id/file', authMiddleware, async (req, res) => {
  * /bookmark:
  *   post:
  *     summary: Menambahkan bookmark
- *     description: Menambahkan resource ke bookmark mahasiswa.
+ *     description: Menambahkan resource atau wawasan (experience) ke bookmark mahasiswa.
  *     tags: [Bookmark]
  *     security:
  *       - BearerAuth: []
@@ -2398,22 +2430,28 @@ app.get('/resource/:id/file', authMiddleware, async (req, res) => {
  *         application/json:
  *           schema:
  *             type: object
- *             required: [resource_id]
  *             properties:
  *               resource_id:
  *                 type: string
  *                 format: uuid
+ *                 description: ID resource yang akan dibookmark (opsional jika experience_id diisi)
+ *               experience_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID wawasan/experience yang akan dibookmark (opsional jika resource_id diisi)
  *     responses:
  *       201:
- *         description: Resource berhasil ditambahkan ke bookmark
+ *         description: Berhasil ditambahkan ke bookmark
  *       400:
- *         description: resource_id wajib diisi
+ *         description: resource_id atau experience_id wajib diisi
  *       401:
  *         description: Token tidak valid atau tidak tersedia
  *       403:
  *         description: Akses hanya untuk mahasiswa
+ *       404:
+ *         description: Resource atau wawasan tidak ditemukan
  *       409:
- *         description: Resource sudah ada di bookmark
+ *         description: Konten sudah ada di bookmark
  *       500:
  *         description: Terjadi kesalahan saat menambahkan bookmark
  */
@@ -2426,55 +2464,116 @@ app.post(
   roleMiddleware('mahasiswa'),
   async (req, res) => {
     try {
-      const { resource_id } = req.body;
+      const { resource_id, experience_id } = req.body;
       const user_id = req.user.user_id;
 
-      if (!resource_id) {
+      if (!resource_id && !experience_id) {
         return res.status(400).json({
-          error: 'resource_id wajib diisi'
+          error: 'resource_id atau experience_id wajib diisi'
         });
       }
-     
-      // Periksa apakah bookmark sudah ada
-      const { data: existingBookmarks, error: checkError } =
-        await supabaseAdmin
-          .from('bookmark')
-          .select('user_id, resource_id')
-          .eq('user_id', user_id)
+
+      // Bookmark untuk Resource
+      if (resource_id) {
+        // Cek keberadaan resource
+        const { data: resData, error: resErr } = await supabaseAdmin
+          .from('resource')
+          .select('resource_id')
           .eq('resource_id', resource_id)
-          .limit(1);
+          .maybeSingle();
 
-      if (checkError) {
-        throw checkError;
-      }
+        if (resErr) throw resErr;
+        if (!resData) {
+          return res.status(404).json({
+            error: 'Resource tidak ditemukan'
+          });
+        }
 
-      if (existingBookmarks && existingBookmarks.length > 0) {
-        return res.status(409).json({
-          error: 'Resource sudah ada di bookmark!'
+        // Periksa apakah bookmark sudah ada
+        const { data: existingBookmarks, error: checkError } =
+          await supabaseAdmin
+            .from('bookmark')
+            .select('user_id, resource_id')
+            .eq('user_id', user_id)
+            .eq('resource_id', resource_id)
+            .limit(1);
+
+        if (checkError) throw checkError;
+
+        if (existingBookmarks && existingBookmarks.length > 0) {
+          return res.status(409).json({
+            error: 'Resource sudah ada di bookmark!'
+          });
+        }
+
+        const { data, error } = await supabaseAdmin
+          .from('bookmark')
+          .insert([
+            {
+              user_id,
+              resource_id
+            }
+          ])
+          .select();
+
+        if (error) throw error;
+
+        return res.status(201).json({
+          message: 'Resource berhasil ditambahkan ke bookmark!',
+          data
         });
       }
 
-      // Tambahkan bookmark jika belum ada
+      // Bookmark untuk Experience (Wawasan)
+      if (experience_id) {
+        // Cek keberadaan wawasan
+        const { data: expData, error: expErr } = await supabaseAdmin
+          .from('experience')
+          .select('experience_id')
+          .eq('experience_id', experience_id)
+          .maybeSingle();
 
-      // Tambahkan bookmark jika belum ada
-      const { data, error } = await supabaseAdmin
-        .from('bookmark')
-        .insert([
-          {
-            user_id,
-            resource_id
-          }
-        ])
-        .select();
+        if (expErr) throw expErr;
+        if (!expData) {
+          return res.status(404).json({
+            error: 'Wawasan tidak ditemukan'
+          });
+        }
 
-      if (error) {
-        throw error;
+        // Periksa apakah bookmark wawasan sudah ada
+        const { data: existingBookmarks, error: checkError } =
+          await supabaseAdmin
+            .from('bookmark')
+            .select('user_id, experience_id')
+            .eq('user_id', user_id)
+            .eq('experience_id', experience_id)
+            .limit(1);
+
+        if (checkError) throw checkError;
+
+        if (existingBookmarks && existingBookmarks.length > 0) {
+          return res.status(409).json({
+            error: 'Wawasan sudah ada di bookmark!'
+          });
+        }
+
+        const { data, error } = await supabaseAdmin
+          .from('bookmark')
+          .insert([
+            {
+              user_id,
+              experience_id
+            }
+          ])
+          .select();
+
+        if (error) throw error;
+
+        return res.status(201).json({
+          message: 'Wawasan berhasil ditambahkan ke bookmark!',
+          data
+        });
       }
-
-      return res.status(201).json({
-        message: 'Resource berhasil ditambahkan ke bookmark!',
-        data
-      });
 
     } catch (err) {
       console.error('Gagal menambahkan bookmark:', err.message);
@@ -2492,7 +2591,7 @@ app.post(
  * /bookmark:
  *   get:
  *     summary: Mengambil bookmark mahasiswa
- *     description: Mengambil daftar bookmark milik mahasiswa yang sedang login.
+ *     description: Mengambil daftar bookmark milik mahasiswa yang sedang login (baik resource maupun wawasan).
  *     tags: [Bookmark]
  *     security:
  *       - BearerAuth: []
@@ -2522,15 +2621,28 @@ app.get(
         .select(`
           user_id,
           resource_id,
+          experience_id,
           resource (
             resource_id,
             judul,
             deskripsi,
             sumber,
             status,
+            format_file,
             semester_id,
             prodi_id,
             fakultas_id
+          ),
+          experience (
+            experience_id,
+            judul,
+            sub_judul,
+            kategori,
+            tags,
+            sampul,
+            jumlah_dibaca,
+            status,
+            created_at
           )
         `)
         .eq('user_id', user_id);
@@ -2561,7 +2673,7 @@ app.get(
  * /bookmark/{resource_id}:
  *   delete:
  *     summary: Menghapus bookmark
- *     description: Menghapus bookmark milik mahasiswa untuk resource tertentu.
+ *     description: Menghapus bookmark milik mahasiswa berdasarkan ID resource atau ID wawasan/experience.
  *     tags: [Bookmark]
  *     security:
  *       - BearerAuth: []
@@ -2569,6 +2681,7 @@ app.get(
  *       - in: path
  *         name: resource_id
  *         required: true
+ *         description: ID resource atau ID wawasan (experience) yang akan dihapus dari bookmark
  *         schema:
  *           type: string
  *           format: uuid
@@ -2596,12 +2709,13 @@ app.delete(
       const { resource_id } = req.params;
       const user_id = req.user.user_id;
 
+      // Hapus berdasarkan resource_id atau experience_id
       const { data, error } = await supabaseAdmin
         .from('bookmark')
         .delete()
         .eq('user_id', user_id)
-        .eq('resource_id', resource_id)
-        .select('user_id, resource_id');
+        .or(`resource_id.eq.${resource_id},experience_id.eq.${resource_id}`)
+        .select();
 
       if (error) {
         throw error;
@@ -2754,6 +2868,7 @@ app.post(
             kategori: kategori || null,
             tags: tagsArray,
             sampul: sampulLink,
+            jumlah_dibaca: 0,
             status: 'pending',
             user_id
           }
@@ -2808,6 +2923,7 @@ app.get('/experience', async (req, res) => {
         kategori,
         tags,
         sampul,
+        jumlah_dibaca,
         status,
         created_at,
         user_id,
@@ -2824,9 +2940,38 @@ app.get('/experience', async (req, res) => {
       throw error;
     }
 
+    // Ambil rekap rating wawasan
+    let experiencesWithRating = data;
+    try {
+      const { data: ratingData } = await supabaseAdmin
+        .from('rating_review')
+        .select('experience_id, nilai_rating')
+        .not('experience_id', 'is', null);
+
+      if (ratingData && ratingData.length > 0) {
+        const rekap = {};
+        for (const item of ratingData) {
+          if (!item.experience_id || item.nilai_rating == null) continue;
+          if (!rekap[item.experience_id]) {
+            rekap[item.experience_id] = { total: 0, jumlah: 0 };
+          }
+          rekap[item.experience_id].total += Number(item.nilai_rating);
+          rekap[item.experience_id].jumlah += 1;
+        }
+
+        experiencesWithRating = (data || []).map(exp => ({
+          ...exp,
+          rating_rata_rata: rekap[exp.experience_id]
+            ? rekap[exp.experience_id].total / rekap[exp.experience_id].jumlah
+            : null,
+          total_ulasan: rekap[exp.experience_id]?.jumlah || 0
+        }));
+      }
+    } catch (_) {}
+
     return res.status(200).json({
       message: 'Data experience berhasil diambil!',
-      data
+      data: experiencesWithRating
     });
 
   } catch (err) {
@@ -2844,7 +2989,7 @@ app.get('/experience', async (req, res) => {
  * /experience/{id}:
  *   get:
  *     summary: Mengambil detail satu experience
- *     description: Mengambil detail satu tulisan experience yang disetujui beserta data penulis.
+ *     description: Mengambil detail satu tulisan experience yang disetujui beserta data penulis, rating rata-rata, dan menambah counter jumlah_dibaca.
  *     tags: [Experience]
  *     parameters:
  *       - in: path
@@ -2875,6 +3020,7 @@ app.get('/experience/:id', async (req, res) => {
         kategori,
         tags,
         sampul,
+        jumlah_dibaca,
         status,
         created_at,
         user_id,
@@ -2894,6 +3040,35 @@ app.get('/experience/:id', async (req, res) => {
       return res.status(404).json({
         error: 'Experience tidak ditemukan'
       });
+    }
+
+    // Auto-increment jumlah_dibaca
+    const currentReads = data.jumlah_dibaca || 0;
+    await supabaseAdmin
+      .from('experience')
+      .update({ jumlah_dibaca: currentReads + 1 })
+      .eq('experience_id', id);
+
+    data.jumlah_dibaca = currentReads + 1;
+
+    // Ambil statistik rating & review wawasan ini
+    try {
+      const { data: ratingRows } = await supabaseAdmin
+        .from('rating_review')
+        .select('nilai_rating')
+        .eq('experience_id', id);
+
+      if (ratingRows && ratingRows.length > 0) {
+        const total = ratingRows.reduce((acc, curr) => acc + Number(curr.nilai_rating), 0);
+        data.rating_rata_rata = total / ratingRows.length;
+        data.total_ulasan = ratingRows.length;
+      } else {
+        data.rating_rata_rata = null;
+        data.total_ulasan = 0;
+      }
+    } catch (_) {
+      data.rating_rata_rata = null;
+      data.total_ulasan = 0;
     }
 
     return res.status(200).json({
@@ -3036,7 +3211,7 @@ if (typeof alasan !== 'string' || !alasan.trim()) {
  * /rating-review:
  *   post:
  *     summary: Mengirim atau memperbarui rating dan review
- *     description: Mahasiswa memberikan rating 1 sampai 5 dan review opsional untuk resource.
+ *     description: Mahasiswa memberikan rating 1 sampai 5 dan review opsional untuk resource atau wawasan (experience).
  *     tags: [Rating & Review]
  *     security:
  *       - BearerAuth: []
@@ -3046,11 +3221,16 @@ if (typeof alasan !== 'string' || !alasan.trim()) {
  *         application/json:
  *           schema:
  *             type: object
- *             required: [resource_id, nilai_rating]
+ *             required: [nilai_rating]
  *             properties:
  *               resource_id:
  *                 type: string
  *                 format: uuid
+ *                 description: ID resource yang dinilai (opsional jika experience_id diisi)
+ *               experience_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID wawasan/experience yang dinilai (opsional jika resource_id diisi)
  *               nilai_rating:
  *                 type: integer
  *                 minimum: 1
@@ -3068,13 +3248,13 @@ if (typeof alasan !== 'string' || !alasan.trim()) {
  *       403:
  *         description: Akses hanya untuk mahasiswa
  *       404:
- *         description: Resource tidak ditemukan
+ *         description: Resource atau wawasan tidak ditemukan
  *       500:
  *         description: Terjadi kesalahan saat mengirim rating dan review
  */
 
 
- // TAMBAH RATING & REVIEW
+ // TAMBAH / UPDATE RATING & REVIEW
 app.post(
   '/rating-review',
   authMiddleware,
@@ -3083,21 +3263,27 @@ app.post(
     try {
       const {
         resource_id,
+        experience_id,
         nilai_rating,
         isi_review
       } = req.body;
 
       const user_id = req.user.user_id;
 
-      // Validasi wajib isi
+      // Validasi wajib salah satu target diisi
+      if (!resource_id && !experience_id) {
+        return res.status(400).json({
+          error: 'resource_id atau experience_id serta nilai_rating wajib diisi'
+        });
+      }
+
       if (
-        !resource_id ||
         nilai_rating === undefined ||
         nilai_rating === null ||
         nilai_rating === ''
       ) {
         return res.status(400).json({
-          error: 'resource_id dan nilai_rating wajib diisi'
+          error: 'nilai_rating wajib diisi'
         });
       }
 
@@ -3118,68 +3304,148 @@ app.post(
         });
       }
       
-      // Validasi format UUID resource_id
       const uuidRegex =
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-      if (!uuidRegex.test(resource_id)) {
-        return res.status(400).json({
-          error: 'Format resource_id tidak valid'
+      // Rating untuk Resource
+      if (resource_id) {
+        if (!uuidRegex.test(resource_id)) {
+          return res.status(400).json({
+            error: 'Format resource_id tidak valid'
+          });
+        }
+
+        const { data: resource, error: resourceError } = await supabaseAdmin
+          .from('resource')
+          .select('resource_id')
+          .eq('resource_id', resource_id)
+          .maybeSingle();
+
+        if (resourceError) throw resourceError;
+        if (!resource) {
+          return res.status(404).json({
+            error: 'Resource tidak ditemukan'
+          });
+        }
+
+        const { data: existingReview, error: findErr } = await supabaseAdmin
+          .from('rating_review')
+          .select('rating_id')
+          .eq('user_id', user_id)
+          .eq('resource_id', resource_id)
+          .maybeSingle();
+
+        if (findErr) throw findErr;
+
+        let resultData;
+        if (existingReview) {
+          const { data, error } = await supabaseAdmin
+            .from('rating_review')
+            .update({
+              nilai_rating,
+              isi_review: isi_review || null
+            })
+            .eq('rating_id', existingReview.rating_id)
+            .select();
+
+          if (error) throw error;
+          resultData = data;
+        } else {
+          const { data, error } = await supabaseAdmin
+            .from('rating_review')
+            .insert([
+              {
+                resource_id,
+                nilai_rating,
+                isi_review: isi_review || null,
+                user_id
+              }
+            ])
+            .select();
+
+          if (error) throw error;
+          resultData = data;
+        }
+
+        return res.status(201).json({
+          message: 'Rating dan review berhasil dikirim!',
+          data: resultData
         });
       }
 
+      // Rating untuk Experience (Wawasan)
+      if (experience_id) {
+        if (!uuidRegex.test(experience_id)) {
+          return res.status(400).json({
+            error: 'Format experience_id tidak valid'
+          });
+        }
 
-      // Cek keberadaan resource
-      const { data: resource, error: resourceError } = await supabaseAdmin
-        .from('resource')
-        .select('resource_id')
-        .eq('resource_id', resource_id)
-        .maybeSingle();
+        const { data: exp, error: expError } = await supabaseAdmin
+          .from('experience')
+          .select('experience_id')
+          .eq('experience_id', experience_id)
+          .maybeSingle();
 
-      if (resourceError) {
-        throw resourceError;
-      }
+        if (expError) throw expError;
+        if (!exp) {
+          return res.status(404).json({
+            error: 'Wawasan tidak ditemukan'
+          });
+        }
 
-      if (!resource) {
-        return res.status(404).json({
-          error: 'Resource tidak ditemukan'
+        const { data: existingReview, error: findErr } = await supabaseAdmin
+          .from('rating_review')
+          .select('rating_id')
+          .eq('user_id', user_id)
+          .eq('experience_id', experience_id)
+          .maybeSingle();
+
+        if (findErr) throw findErr;
+
+        let resultData;
+        if (existingReview) {
+          const { data, error } = await supabaseAdmin
+            .from('rating_review')
+            .update({
+              nilai_rating,
+              isi_review: isi_review || null
+            })
+            .eq('rating_id', existingReview.rating_id)
+            .select();
+
+          if (error) throw error;
+          resultData = data;
+        } else {
+          const { data, error } = await supabaseAdmin
+            .from('rating_review')
+            .insert([
+              {
+                experience_id,
+                nilai_rating,
+                isi_review: isi_review || null,
+                user_id
+              }
+            ])
+            .select();
+
+          if (error) throw error;
+          resultData = data;
+        }
+
+        return res.status(201).json({
+          message: 'Rating dan review wawasan berhasil dikirim!',
+          data: resultData
         });
       }
 
-      // Simpan atau perbarui rating dan review
-      const { data, error } = await supabaseAdmin
-        .from('rating_review')
-        .upsert(
-          {
-            resource_id,
-            nilai_rating,
-            isi_review: isi_review || null,
-            user_id
-          },
-          {
-            onConflict: 'user_id,resource_id'
-          }
-        )
-        .select();
+    } catch (err) {
+      console.error('Gagal mengirim rating dan review:', err.message);
 
-      if (error) {
-        throw error;
-      }
-
-      res.status(201).json({
-        message: 'Rating dan review berhasil dikirim!',
-        data
+      return res.status(500).json({
+        error: 'Terjadi kesalahan saat mengirim rating dan review.'
       });
-
-    
-} catch (err) {
-  console.error('Gagal mengirim rating dan review:', err.message);
-
-  return res.status(500).json({
-    error: 'Terjadi kesalahan saat mengirim rating dan review.'
-  });
-}
-
+    }
   }
 );
 
@@ -3188,13 +3454,14 @@ app.post(
  * @swagger
  * /rating-review/{resource_id}:
  *   get:
- *     summary: Mengambil rating dan review resource
- *     description: Mengambil daftar rating dan review berdasarkan ID resource. Dapat diakses tanpa login.
+ *     summary: Mengambil rating dan review (resource atau wawasan)
+ *     description: Mengambil daftar rating dan review berdasarkan ID resource atau ID wawasan. Dapat diakses tanpa login.
  *     tags: [Rating & Review]
  *     parameters:
  *       - in: path
  *         name: resource_id
  *         required: true
+ *         description: ID resource atau ID wawasan
  *         schema:
  *           type: string
  *           format: uuid
@@ -3206,7 +3473,7 @@ app.post(
  */
 
 
-// GET RATING & REVIEW RESOURCE
+// GET RATING & REVIEW (RESOURCE ATAU WAWASAN)
 app.get('/rating-review/:resource_id', async (req, res) => {
   try {
     const { resource_id } = req.params;
@@ -3218,9 +3485,15 @@ app.get('/rating-review/:resource_id', async (req, res) => {
         nilai_rating,
         isi_review,
         user_id,
-        resource_id
+        resource_id,
+        experience_id,
+        pengguna:user_id (
+          nama,
+          nim,
+          prodi
+        )
       `)
-      .eq('resource_id', resource_id);
+      .or(`resource_id.eq.${resource_id},experience_id.eq.${resource_id}`);
 
     if (error) {
       throw error;
@@ -3228,6 +3501,46 @@ app.get('/rating-review/:resource_id', async (req, res) => {
 
     res.status(200).json({
       message: 'Rating dan review berhasil diambil!',
+      data
+    });
+
+  } catch (err) {
+    console.error(err);
+
+    res.status(500).json({
+      error: err.message
+    });
+  }
+});
+
+
+// GET RATING & REVIEW KHUSUS WAWASAN
+app.get('/rating-review/experience/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await supabaseAdmin
+      .from('rating_review')
+      .select(`
+        rating_id,
+        nilai_rating,
+        isi_review,
+        user_id,
+        experience_id,
+        pengguna:user_id (
+          nama,
+          nim,
+          prodi
+        )
+      `)
+      .eq('experience_id', id);
+
+    if (error) {
+      throw error;
+    }
+
+    res.status(200).json({
+      message: 'Rating dan review wawasan berhasil diambil!',
       data
     });
 
@@ -3342,7 +3655,8 @@ app.get(
           pengguna:user_id (
             nama,
             nim,
-            prodi
+            prodi,
+            email
           ),
           category_id,
           kategori (

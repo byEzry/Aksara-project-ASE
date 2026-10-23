@@ -22,18 +22,28 @@ ALTER TABLE IF EXISTS resource ADD COLUMN IF NOT EXISTS jumlah_unduhan INTEGER D
 ALTER TABLE IF EXISTS resource ADD COLUMN IF NOT EXISTS jumlah_dilihat INTEGER DEFAULT 0;
 ALTER TABLE IF EXISTS resource ADD COLUMN IF NOT EXISTS format_file TEXT;
 
--- 4. TABEL EXPERIENCE (Wawasan: Sub Judul, Kategori, Tags, Sampul, Tanggal)
+-- 4. TABEL EXPERIENCE (Wawasan: Sub Judul, Kategori, Tags, Sampul, Tanggal, & Jumlah Dibaca)
 ALTER TABLE IF EXISTS experience ADD COLUMN IF NOT EXISTS sub_judul TEXT;
 ALTER TABLE IF EXISTS experience ADD COLUMN IF NOT EXISTS kategori TEXT;
 ALTER TABLE IF EXISTS experience ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
 ALTER TABLE IF EXISTS experience ADD COLUMN IF NOT EXISTS sampul TEXT;
+ALTER TABLE IF EXISTS experience ADD COLUMN IF NOT EXISTS jumlah_dibaca INTEGER DEFAULT 0;
 ALTER TABLE IF EXISTS experience ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 
--- 5. INDEKS UNTUK OPTIMASI PERFORMA QUERY
+-- 5. TABEL RATING_REVIEW & BOOKMARK (Dukungan untuk Wawasan / Experience)
+ALTER TABLE IF EXISTS rating_review ADD COLUMN IF NOT EXISTS experience_id UUID REFERENCES experience(experience_id) ON DELETE CASCADE;
+ALTER TABLE IF EXISTS rating_review ALTER COLUMN resource_id DROP NOT NULL;
+
+ALTER TABLE IF EXISTS bookmark ADD COLUMN IF NOT EXISTS experience_id UUID REFERENCES experience(experience_id) ON DELETE CASCADE;
+ALTER TABLE IF EXISTS bookmark ALTER COLUMN resource_id DROP NOT NULL;
+
+-- 6. INDEKS UNTUK OPTIMASI PERFORMA QUERY
 CREATE INDEX IF NOT EXISTS idx_pengguna_nim ON pengguna(nim);
 CREATE INDEX IF NOT EXISTS idx_resource_status ON resource(status);
 CREATE INDEX IF NOT EXISTS idx_report_status ON report(status);
 CREATE INDEX IF NOT EXISTS idx_experience_status ON experience(status);
+CREATE INDEX IF NOT EXISTS idx_rating_review_experience ON rating_review(experience_id);
+CREATE INDEX IF NOT EXISTS idx_bookmark_experience ON bookmark(experience_id);
 
 -- ====================================================================
 -- FILTER PROGRAM STUDI: HANYA SISAKAN 4 JURUSAN FAKULTAS INFORMATIKA (FIF)
